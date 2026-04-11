@@ -9,7 +9,7 @@ Phase 1 establishes the project foundation:
 - SQLite-backed metadata store with embedded migrations in `pkg/db`
 - concurrent directory scanner for supported audio file extensions in `pkg/scanner`
 
-Phase 2 has started with shared audio buffer/codec abstractions and pure-Go codecs for WAV, AIFF, FLAC, MP3, and OGG/Vorbis.
+Phase 2 has started with shared audio buffer/codec abstractions, playback support, and pure-Go codecs for WAV, AIFF, FLAC, MP3, and OGG/Vorbis.
 
 Phase 3 has started with reusable metadata, spectral, beat, pitch, key, MFCC, loudness, and dynamics extraction, plus consolidated feature-vector building, including embedded file metadata (for example ID3/Vorbis/FLAC tags), and the tagging layer now includes path-based tag extraction.
 

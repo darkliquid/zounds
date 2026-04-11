@@ -1,7 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"github.com/spf13/cobra"
+
+	"github.com/darkliquid/zounds/cmd/zounds/commands"
+)
 
 func main() {
-	fmt.Println("zounds: foundation initialized; CLI commands will be added in later phases")
+	cobra.CheckErr(commands.NewRootCommand().Execute())
 }

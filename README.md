@@ -9,12 +9,13 @@ Phase 1 establishes the project foundation:
 - SQLite-backed metadata store with embedded migrations in `pkg/db`
 - concurrent directory scanner for supported audio file extensions in `pkg/scanner`
 
-Phase 2 has started with the shared audio buffer/codec abstraction and an initial WAV codec implementation.
+Phase 2 has started with shared audio buffer/codec abstractions and pure-Go codecs for WAV, AIFF, FLAC, MP3, and OGG/Vorbis.
 
 ## Current layout
 
 ```text
 cmd/zounds         CLI entrypoint placeholder
+cmd/zounds/commands Cobra root command and command tree scaffold
 pkg/core           shared domain types and interfaces
 pkg/audio          PCM buffer, codec interfaces, registries
 pkg/db             SQLite connection, migrations, repository helpers

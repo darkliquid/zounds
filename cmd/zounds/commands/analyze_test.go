@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/darkliquid/zounds/cmd/zounds/commands"
+	"github.com/darkliquid/zounds/pkg/analysis"
 )
 
 func TestAnalyzeCommandPersistsFeatureVector(t *testing.T) {
@@ -52,6 +53,9 @@ func TestAnalyzeCommandPersistsFeatureVector(t *testing.T) {
 	if vectors[0].Namespace != "analysis" {
 		t.Fatalf("unexpected vector namespace: %s", vectors[0].Namespace)
 	}
+	if vectors[0].Dimensions != len(analysis.FeatureNames()) {
+		t.Fatalf("unexpected vector dimensions: got=%d want=%d", vectors[0].Dimensions, len(analysis.FeatureNames()))
+	}
 }
 
 func TestInfoCommandOutputsAnalysisJSON(t *testing.T) {
@@ -78,5 +82,15 @@ func TestInfoCommandOutputsAnalysisJSON(t *testing.T) {
 	}
 	if _, ok := payload["feature_vector"]; !ok {
 		t.Fatalf("missing feature_vector in payload")
+	}
+	analyzers, ok := payload["analyzers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing analyzers payload")
+	}
+	if _, ok := analyzers["key"]; !ok {
+		t.Fatalf("expected key analyzer output")
+	}
+	if _, ok := analyzers["hpss"]; !ok {
+		t.Fatalf("expected hpss analyzer output")
 	}
 }

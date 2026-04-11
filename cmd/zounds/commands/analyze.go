@@ -112,10 +112,12 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 	factory := []func() (core.Analyzer, error){
 		func() (core.Analyzer, error) { return analysis.NewMetadataAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewSpectralAnalyzer(nil) },
+		func() (core.Analyzer, error) { return analysis.NewKeyAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewBeatAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewPitchAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewLoudnessAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewDynamicsAnalyzer(nil) },
+		func() (core.Analyzer, error) { return analysis.NewHPSSAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(nil) },
 	}
 

@@ -30,7 +30,7 @@ func NewRootCommand() *cobra.Command {
 	flags.IntVarP(&cfg.Concurrency, "concurrency", "j", cfg.Concurrency, "maximum number of concurrent workers")
 
 	cmd.AddCommand(
-		newPlaceholderCommand("scan", "Scan directories and register audio files"),
+		newScanCommand(&cfg),
 		newPlaceholderCommand("analyze", "Run analyzers against indexed samples"),
 		newPlaceholderCommand("tag", "Manage and infer sample tags"),
 		newPlaceholderCommand("cluster", "Cluster related sounds"),
@@ -38,7 +38,7 @@ func NewRootCommand() *cobra.Command {
 		newPlaceholderCommand("convert", "Convert, resample, or normalize audio"),
 		newPlaceholderCommand("rename", "Mass rename and reorganize library files"),
 		newPlaceholderCommand("serve", "Run the web UI and API server"),
-		newPlaceholderCommand("export", "Export sample metadata and analysis results"),
+		newExportCommand(&cfg),
 		newPlaceholderCommand("info", "Show detailed information about a sample"),
 		newPlaceholderCommand("play", "Play a sample or search result"),
 		newPlaceholderCommand("browse", "Browse the sample library interactively"),

@@ -41,7 +41,7 @@ func NewRootCommand() *cobra.Command {
 		newExportCommand(&cfg),
 		newInfoCommand(&cfg),
 		newPlayCommand(&cfg),
-		newPlaceholderCommand("browse", "Browse the sample library interactively"),
+		newBrowseCommand(&cfg),
 	)
 
 	return cmd

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -33,32 +34,7 @@ func newPlayCommand(cfg *Config) *cobra.Command {
 				return err
 			}
 
-			registry, err := codecs.NewRegistry()
-			if err != nil {
-				return err
-			}
-
-			result, err := zaudio.DecodeFile(cmd.Context(), registry, target)
-			if err != nil {
-				return err
-			}
-
-			player, err := zaudio.NewPlayback(zaudio.PlaybackOptions{Registry: registry})
-			if err != nil {
-				return err
-			}
-			if err := player.PlayBuffer(cmd.Context(), result.Buffer); err != nil {
-				return err
-			}
-			player.SetVolume(volume)
-
-			if noBlock {
-				_, err := fmt.Fprintf(cmd.OutOrStdout(), "playing %s\n", target)
-				return err
-			}
-
-			waitForPlayback(result.Buffer.Duration())
-			return player.Stop()
+			return playTarget(cmd.Context(), cmd.OutOrStdout(), target, volume, noBlock)
 		},
 	}
 
@@ -89,6 +65,35 @@ func resolvePlaybackTarget(ctx context.Context, cfg *Config, input string) (stri
 	}
 
 	return samples[0].Path, nil
+}
+
+func playTarget(ctx context.Context, out io.Writer, target string, volume float64, noBlock bool) error {
+	registry, err := codecs.NewRegistry()
+	if err != nil {
+		return err
+	}
+
+	result, err := zaudio.DecodeFile(ctx, registry, target)
+	if err != nil {
+		return err
+	}
+
+	player, err := zaudio.NewPlayback(zaudio.PlaybackOptions{Registry: registry})
+	if err != nil {
+		return err
+	}
+	if err := player.PlayBuffer(ctx, result.Buffer); err != nil {
+		return err
+	}
+	player.SetVolume(volume)
+
+	if noBlock {
+		_, err := fmt.Fprintf(out, "playing %s\n", target)
+		return err
+	}
+
+	waitForPlayback(result.Buffer.Duration())
+	return player.Stop()
 }
 
 func waitForPlayback(duration time.Duration) {

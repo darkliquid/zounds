@@ -12,7 +12,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const keyAnalyzerVersion = "0.1.0"
+const keyAnalyzerVersion = "0.2.0"
 
 var (
 	majorProfile = []float64{6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88}
@@ -67,11 +67,8 @@ func (a *KeyAnalyzer) Analyze(ctx context.Context, sample core.Sample) (core.Ana
 		Analyzer:    a.Name(),
 		Version:     a.Version(),
 		CompletedAt: time.Now().UTC(),
-		Metrics: map[string]float64{
-			"key_confidence": stats.Confidence,
-			"key_root_index": float64(stats.RootIndex),
-		},
-		Attributes: attributes,
+		Metrics:     buildKeyMetrics(stats),
+		Attributes:  attributes,
 	}, nil
 }
 
@@ -81,8 +78,13 @@ type KeyStats struct {
 	Mode       string
 	RootIndex  int
 	Confidence float64
+	Chroma     [12]float64
+	Tonnetz    [6]float64
 }
 
+// computeKey exposes the normalized chroma profile described by Bartsch and
+// Wakefield (2005) and the tonal centroid projection described by Harte,
+// Sandler, and Gasser (2006), "Detecting harmonic change in musical audio."
 func computeKey(buffer zaudio.PCMBuffer) KeyStats {
 	mono := mixDownMono(buffer)
 	if len(mono) < 2 || buffer.SampleRate <= 0 {
@@ -151,13 +153,32 @@ func computeKey(buffer zaudio.PCMBuffer) KeyStats {
 		return KeyStats{}
 	}
 
+	var chromaProfile [12]float64
+	copy(chromaProfile[:], chroma)
+
 	return KeyStats{
 		Key:        fmt.Sprintf("%s %s", noteClasses[bestRoot], bestMode),
 		Tonic:      noteClasses[bestRoot],
 		Mode:       bestMode,
 		RootIndex:  bestRoot,
 		Confidence: bestScore,
+		Chroma:     chromaProfile,
+		Tonnetz:    tonalCentroid(chroma),
 	}
+}
+
+func buildKeyMetrics(stats KeyStats) map[string]float64 {
+	metrics := map[string]float64{
+		"key_confidence": stats.Confidence,
+		"key_root_index": float64(stats.RootIndex),
+	}
+	for i, value := range stats.Chroma {
+		metrics[fmt.Sprintf("chroma_%d", i)] = value
+	}
+	for i, value := range stats.Tonnetz {
+		metrics[fmt.Sprintf("tonnetz_%d", i)] = value
+	}
+	return metrics
 }
 
 func accumulateChroma(chroma, power []float64, sampleRate int, fft *fourier.FFT) {
@@ -191,6 +212,20 @@ func normalizeChroma(chroma []float64) {
 	for i := range chroma {
 		chroma[i] /= total
 	}
+}
+
+func tonalCentroid(chroma []float64) [6]float64 {
+	var tonnetz [6]float64
+	for i, value := range chroma {
+		pitchClass := float64(i)
+		tonnetz[0] += value * math.Sin((7*math.Pi*pitchClass)/6)
+		tonnetz[1] += value * math.Cos((7*math.Pi*pitchClass)/6)
+		tonnetz[2] += value * math.Sin((3*math.Pi*pitchClass)/2)
+		tonnetz[3] += value * math.Cos((3*math.Pi*pitchClass)/2)
+		tonnetz[4] += value * math.Sin((2*math.Pi*pitchClass)/3)
+		tonnetz[5] += value * math.Cos((2*math.Pi*pitchClass)/3)
+	}
+	return tonnetz
 }
 
 func rotateProfile(profile []float64, shift int) []float64 {

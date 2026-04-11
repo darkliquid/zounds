@@ -8,7 +8,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const featureVectorVersion = "0.2.0"
+const featureVectorVersion = "0.3.0"
 
 var defaultFeatureOrder = []string{
 	"sample_rate",
@@ -50,6 +50,24 @@ var defaultFeatureOrder = []string{
 	"midi_note",
 	"confidence",
 	"cents_from_note",
+	"chroma_0",
+	"chroma_1",
+	"chroma_2",
+	"chroma_3",
+	"chroma_4",
+	"chroma_5",
+	"chroma_6",
+	"chroma_7",
+	"chroma_8",
+	"chroma_9",
+	"chroma_10",
+	"chroma_11",
+	"tonnetz_0",
+	"tonnetz_1",
+	"tonnetz_2",
+	"tonnetz_3",
+	"tonnetz_4",
+	"tonnetz_5",
 	"mfcc_0",
 	"mfcc_1",
 	"mfcc_2",

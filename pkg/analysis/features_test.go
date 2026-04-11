@@ -85,6 +85,10 @@ func TestFeatureVectorBuilderWorksWithAnalyzerOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create pitch analyzer: %v", err)
 	}
+	keyAnalyzer, err := analysis.NewKeyAnalyzer(nil)
+	if err != nil {
+		t.Fatalf("create key analyzer: %v", err)
+	}
 	loudnessAnalyzer, err := analysis.NewLoudnessAnalyzer(nil)
 	if err != nil {
 		t.Fatalf("create loudness analyzer: %v", err)
@@ -106,6 +110,10 @@ func TestFeatureVectorBuilderWorksWithAnalyzerOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pitch analyze: %v", err)
 	}
+	keyResult, err := keyAnalyzer.Analyze(ctx, sample)
+	if err != nil {
+		t.Fatalf("key analyze: %v", err)
+	}
 	loudnessResult, err := loudnessAnalyzer.Analyze(ctx, sample)
 	if err != nil {
 		t.Fatalf("loudness analyze: %v", err)
@@ -116,7 +124,7 @@ func TestFeatureVectorBuilderWorksWithAnalyzerOutputs(t *testing.T) {
 	}
 
 	builder := analysis.NewFeatureVectorBuilder(nil)
-	vector, err := builder.Build(sample.ID, metadataResult, spectralResult, pitchResult, loudnessResult, mfccResult)
+	vector, err := builder.Build(sample.ID, metadataResult, spectralResult, pitchResult, keyResult, loudnessResult, mfccResult)
 	if err != nil {
 		t.Fatalf("build vector: %v", err)
 	}
@@ -129,5 +137,17 @@ func TestFeatureVectorBuilderWorksWithAnalyzerOutputs(t *testing.T) {
 	}
 	if vector.Values[0] == 0 {
 		t.Fatalf("expected non-zero leading metadata feature")
+	}
+	names := analysis.FeatureNames()
+	index := func(name string) int {
+		for i, candidate := range names {
+			if candidate == name {
+				return i
+			}
+		}
+		return -1
+	}
+	if got := vector.Values[index("chroma_9")]; got <= 0 {
+		t.Fatalf("expected non-zero chroma_9 value, got %f", got)
 	}
 }

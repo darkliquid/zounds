@@ -2,6 +2,8 @@ package analysis_test
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,5 +49,20 @@ func TestKeyAnalyzerDetectsCMajorTriad(t *testing.T) {
 	}
 	if result.Metrics["key_confidence"] <= 0 {
 		t.Fatalf("expected positive confidence, got %f", result.Metrics["key_confidence"])
+	}
+	if result.Metrics["chroma_0"] <= result.Metrics["chroma_1"] {
+		t.Fatalf("expected C chroma prominence, got C=%f C#=%f", result.Metrics["chroma_0"], result.Metrics["chroma_1"])
+	}
+	if result.Metrics["chroma_4"] <= result.Metrics["chroma_3"] {
+		t.Fatalf("expected E chroma prominence, got E=%f D#=%f", result.Metrics["chroma_4"], result.Metrics["chroma_3"])
+	}
+	if result.Metrics["chroma_7"] <= result.Metrics["chroma_6"] {
+		t.Fatalf("expected G chroma prominence, got G=%f F#=%f", result.Metrics["chroma_7"], result.Metrics["chroma_6"])
+	}
+	for i := 0; i < 6; i++ {
+		value := result.Metrics[fmt.Sprintf("tonnetz_%d", i)]
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			t.Fatalf("unexpected tonnetz_%d value: %f", i, value)
+		}
 	}
 }

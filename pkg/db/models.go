@@ -155,6 +155,16 @@ func (r *Repository) FindSampleByID(ctx context.Context, id int64) (core.Sample,
 	return sample, nil
 }
 
+func (r *Repository) DeleteSampleByID(ctx context.Context, id int64) error {
+	if _, err := r.db.ExecContext(ctx, `
+		DELETE FROM samples
+		WHERE id = ?;
+	`, id); err != nil {
+		return fmt.Errorf("delete sample %d: %w", id, err)
+	}
+	return nil
+}
+
 func (r *Repository) InsertFeatureVector(ctx context.Context, vector core.FeatureVector) (int64, error) {
 	valuesJSON, err := json.Marshal(vector.Values)
 	if err != nil {

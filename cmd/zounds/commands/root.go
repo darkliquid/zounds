@@ -34,7 +34,7 @@ func NewRootCommand() *cobra.Command {
 		newAnalyzeCommand(&cfg),
 		newTagCommand(&cfg),
 		newClusterCommand(&cfg),
-		newPlaceholderCommand("dedup", "Find exact or perceptual duplicates"),
+		newDedupCommand(&cfg),
 		newConvertCommand(&cfg),
 		newPlaceholderCommand("rename", "Mass rename and reorganize library files"),
 		newPlaceholderCommand("serve", "Run the web UI and API server"),

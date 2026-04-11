@@ -80,27 +80,65 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	if err != nil {
 		return err
 	}
+	spectralAnalyzer, err := analysis.NewSpectralAnalyzer(nil)
+	if err != nil {
+		return err
+	}
+	dynamicsAnalyzer, err := analysis.NewDynamicsAnalyzer(nil)
+	if err != nil {
+		return err
+	}
+	pitchAnalyzer, err := analysis.NewPitchAnalyzer(nil)
+	if err != nil {
+		return err
+	}
 	pathTagger := tags.NewPathTagger()
 	metadataTagger := tags.NewMetadataTagger()
+	ruleTagger := tags.NewRuleTagger()
 
 	applied := 0
 	for _, sample := range samples {
+		results := make([]core.AnalysisResult, 0, 4)
 		result, err := analyzer.Analyze(ctx, sample)
 		if err != nil {
 			return err
 		}
-
-		var generated []core.Tag
-		pathTags, err := pathTagger.Tags(ctx, sample, result)
+		results = append(results, result)
+		spectralResult, err := spectralAnalyzer.Analyze(ctx, sample)
 		if err != nil {
 			return err
 		}
-		metadataTags, err := metadataTagger.Tags(ctx, sample, result)
+		results = append(results, spectralResult)
+		dynamicsResult, err := dynamicsAnalyzer.Analyze(ctx, sample)
+		if err != nil {
+			return err
+		}
+		results = append(results, dynamicsResult)
+		pitchResult, err := pitchAnalyzer.Analyze(ctx, sample)
+		if err != nil {
+			return err
+		}
+		results = append(results, pitchResult)
+
+		combined := combineAnalysisResults(sample.ID, results...)
+
+		var generated []core.Tag
+		pathTags, err := pathTagger.Tags(ctx, sample, combined)
+		if err != nil {
+			return err
+		}
+		metadataTags, err := metadataTagger.Tags(ctx, sample, combined)
+		if err != nil {
+			return err
+		}
+		ruleTags, err := ruleTagger.Tags(ctx, sample, combined)
 		if err != nil {
 			return err
 		}
 		generated = append(generated, pathTags...)
 		generated = append(generated, metadataTags...)
+		generated = append(generated, ruleTags...)
+		generated = dedupeGeneratedTags(generated)
 
 		if cfg.DryRun {
 			applied += len(generated)
@@ -121,6 +159,44 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "processed %d samples and applied %d tags\n", len(samples), applied)
 	return err
+}
+
+func combineAnalysisResults(sampleID int64, results ...core.AnalysisResult) core.AnalysisResult {
+	combined := core.AnalysisResult{
+		SampleID:    sampleID,
+		Analyzer:    "combined",
+		Version:     "0.1.0",
+		Metrics:     analysis.FlattenMetrics(results...),
+		Attributes:  map[string]string{},
+		CompletedAt: results[0].CompletedAt,
+	}
+
+	for _, result := range results {
+		for key, value := range result.Attributes {
+			combined.Attributes[key] = value
+		}
+	}
+
+	return combined
+}
+
+func dedupeGeneratedTags(tags []core.Tag) []core.Tag {
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]core.Tag, 0, len(tags))
+	for _, tag := range tags {
+		if tag.NormalizedName == "" {
+			tag.NormalizedName = core.NormalizeTagName(tag.Name)
+		}
+		if tag.NormalizedName == "" {
+			continue
+		}
+		if _, ok := seen[tag.NormalizedName]; ok {
+			continue
+		}
+		seen[tag.NormalizedName] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
 }
 
 func runListTags(ctx context.Context, cmd *cobra.Command, repo *db.Repository) error {

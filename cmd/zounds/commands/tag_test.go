@@ -3,6 +3,7 @@ package commands_test
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,45 @@ func TestTagCommandAutoAppliesPathTags(t *testing.T) {
 		if _, ok := names[expected]; !ok {
 			t.Fatalf("missing auto tag %q in %v", expected, names)
 		}
+	}
+}
+
+func TestTagCommandAutoAppliesRuleTags(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "rules.db")
+	samplePath := filepath.Join(root, "Synth", "tone.wav")
+	writeSineWAVFixture(t, samplePath, 55, 1.0)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	tagCmd := commands.NewRootCommand()
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto"})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute auto tag: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	sample, err := repo.FindSampleByPath(context.Background(), samplePath)
+	if err != nil {
+		t.Fatalf("find sample: %v", err)
+	}
+	got, err := repo.ListTagsForSample(context.Background(), sample.ID)
+	if err != nil {
+		t.Fatalf("list sample tags: %v", err)
+	}
+
+	names := make(map[string]struct{}, len(got))
+	for _, tag := range got {
+		names[tag.NormalizedName] = struct{}{}
+	}
+	if _, ok := names["sub"]; !ok {
+		t.Fatalf("missing rule tag %q in %v", "sub", names)
 	}
 }
 
@@ -132,6 +172,39 @@ func writeWAVFixture(t *testing.T, path string) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("close wav fixture: %v", err)
+	}
+}
+
+func writeSineWAVFixture(t *testing.T, path string, frequency, seconds float64) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sine wav fixture: %v", err)
+	}
+
+	const sampleRate = 44100
+	frames := int(float64(sampleRate) * seconds)
+	data := make([]float64, frames)
+	for i := range data {
+		data[i] = 0.6 * math.Sin(2*math.Pi*frequency*float64(i)/sampleRate)
+	}
+
+	buffer := zaudio.PCMBuffer{
+		SampleRate: sampleRate,
+		Channels:   1,
+		BitDepth:   16,
+		Data:       data,
+	}
+	if err := wav.New().Encode(context.Background(), file, buffer); err != nil {
+		t.Fatalf("encode sine wav fixture: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close sine wav fixture: %v", err)
 	}
 }
 

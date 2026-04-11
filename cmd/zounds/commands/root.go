@@ -37,7 +37,7 @@ func NewRootCommand() *cobra.Command {
 		newDedupCommand(&cfg),
 		newConvertCommand(&cfg),
 		newRenameCommand(&cfg),
-		newPlaceholderCommand("serve", "Run the web UI and API server"),
+		newServeCommand(&cfg),
 		newExportCommand(&cfg),
 		newInfoCommand(&cfg),
 		newPlayCommand(&cfg),

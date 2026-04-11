@@ -119,7 +119,7 @@ func computeLoudness(buffer zaudio.PCMBuffer) LoudnessStats {
 
 func linearToDBFS(value float64) float64 {
 	if value <= 0 {
-		return math.Inf(-1)
+		return -120
 	}
 	return 20 * math.Log10(value)
 }

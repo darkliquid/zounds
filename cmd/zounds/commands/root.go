@@ -31,7 +31,7 @@ func NewRootCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		newScanCommand(&cfg),
-		newPlaceholderCommand("analyze", "Run analyzers against indexed samples"),
+		newAnalyzeCommand(&cfg),
 		newTagCommand(&cfg),
 		newPlaceholderCommand("cluster", "Cluster related sounds"),
 		newPlaceholderCommand("dedup", "Find exact or perceptual duplicates"),
@@ -39,7 +39,7 @@ func NewRootCommand() *cobra.Command {
 		newPlaceholderCommand("rename", "Mass rename and reorganize library files"),
 		newPlaceholderCommand("serve", "Run the web UI and API server"),
 		newExportCommand(&cfg),
-		newPlaceholderCommand("info", "Show detailed information about a sample"),
+		newInfoCommand(&cfg),
 		newPlaceholderCommand("play", "Play a sample or search result"),
 		newPlaceholderCommand("browse", "Browse the sample library interactively"),
 	)

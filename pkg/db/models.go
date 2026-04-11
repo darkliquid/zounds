@@ -127,6 +127,34 @@ func (r *Repository) FindSampleByPath(ctx context.Context, path string) (core.Sa
 	return sample, nil
 }
 
+func (r *Repository) FindSampleByID(ctx context.Context, id int64) (core.Sample, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT
+			id,
+			source_root,
+			path,
+			relative_path,
+			file_name,
+			extension,
+			format,
+			size_bytes,
+			modified_at,
+			scanned_at
+		FROM samples
+		WHERE id = ?;
+	`, id)
+
+	sample, err := scanSample(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return core.Sample{}, err
+		}
+		return core.Sample{}, fmt.Errorf("find sample by id %d: %w", id, err)
+	}
+
+	return sample, nil
+}
+
 func (r *Repository) InsertFeatureVector(ctx context.Context, vector core.FeatureVector) (int64, error) {
 	valuesJSON, err := json.Marshal(vector.Values)
 	if err != nil {
@@ -150,6 +178,53 @@ func (r *Repository) InsertFeatureVector(ctx context.Context, vector core.Featur
 	}
 
 	return id, nil
+}
+
+func (r *Repository) ReplaceFeatureVector(ctx context.Context, vector core.FeatureVector) (int64, error) {
+	if _, err := r.db.ExecContext(ctx, `
+		DELETE FROM feature_vectors
+		WHERE sample_id = ? AND namespace = ?;
+	`, vector.SampleID, vector.Namespace); err != nil {
+		return 0, fmt.Errorf("delete existing feature vectors: %w", err)
+	}
+
+	return r.InsertFeatureVector(ctx, vector)
+}
+
+func (r *Repository) ListFeatureVectorsForSample(ctx context.Context, sampleID int64) ([]core.FeatureVector, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, sample_id, namespace, version, dimensions, values_json, created_at
+		FROM feature_vectors
+		WHERE sample_id = ?
+		ORDER BY namespace, created_at;
+	`, sampleID)
+	if err != nil {
+		return nil, fmt.Errorf("list feature vectors for sample %d: %w", sampleID, err)
+	}
+	defer rows.Close()
+
+	var vectors []core.FeatureVector
+	for rows.Next() {
+		var (
+			vector     core.FeatureVector
+			valuesJSON string
+			createdAt  sql.NullString
+		)
+		if err := rows.Scan(&vector.ID, &vector.SampleID, &vector.Namespace, &vector.Version, &vector.Dimensions, &valuesJSON, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan feature vector: %w", err)
+		}
+		if err := json.Unmarshal([]byte(valuesJSON), &vector.Values); err != nil {
+			return nil, fmt.Errorf("unmarshal feature vector values: %w", err)
+		}
+		vector.CreatedAt = parseTime(createdAt)
+		vectors = append(vectors, vector)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate feature vectors: %w", err)
+	}
+
+	return vectors, nil
 }
 
 func timeToValue(t time.Time) any {

@@ -83,6 +83,11 @@ button:hover {
 
 button.tag {
   background: #374151;
+  transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+button.tag:hover {
+  transform: translateY(-1px);
 }
 
 button.tag.active {

@@ -61,12 +61,16 @@ function renderSummary() {
 function renderTags() {
   const root = document.getElementById("tags");
   root.innerHTML = "";
+  const maxCount = state.tags.reduce((max, entry) => Math.max(max, entry.SampleCount), 1);
 
   for (const entry of state.tags) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = entry.Tag.NormalizedName === state.tag ? "tag active" : "tag";
     button.textContent = `${entry.Tag.NormalizedName} (${entry.SampleCount})`;
+    const scale = 0.9 + (entry.SampleCount / maxCount) * 0.8;
+    button.style.fontSize = `${scale}rem`;
+    button.style.opacity = `${0.65 + (entry.SampleCount / maxCount) * 0.35}`;
     button.addEventListener("click", async () => {
       state.tag = entry.Tag.NormalizedName === state.tag ? "" : entry.Tag.NormalizedName;
       await refreshSamples();

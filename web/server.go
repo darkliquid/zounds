@@ -35,7 +35,9 @@ func NewServer(repo *db.Repository) (*Server, error) {
 	s.mux.Handle("/api/samples", http.HandlerFunc(s.handleSamples))
 	s.mux.Handle("/api/samples/", http.HandlerFunc(s.handleSampleRoutes))
 	s.mux.Handle("/api/tags", http.HandlerFunc(s.handleTags))
+	s.mux.Handle("/api/tags/", http.HandlerFunc(s.handleTagRoutes))
 	s.mux.Handle("/api/clusters", http.HandlerFunc(s.handleClusters))
+	s.mux.Handle("/api/clusters/", http.HandlerFunc(s.handleClusterRoutes))
 	s.mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
 	return s, nil
@@ -70,6 +72,7 @@ func (s *Server) handleSamples(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 
 	var (
 		samples []core.Sample
@@ -83,6 +86,10 @@ func (s *Server) handleSamples(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+
+	if query != "" {
+		samples = filterSamplesByQuery(samples, query)
 	}
 
 	out := make([]sampleResponse, 0, len(samples))
@@ -178,6 +185,44 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tags)
 }
 
+func (s *Server) handleTagRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/api/tags/")
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[1] != "samples" {
+		http.NotFound(w, r)
+		return
+	}
+
+	samples, err := s.repo.FindSamplesByTag(r.Context(), parts[0])
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	out := make([]sampleResponse, 0, len(samples))
+	for _, sample := range samples {
+		tags, err := s.repo.ListTagsForSample(r.Context(), sample.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		out = append(out, sampleResponse{Sample: sample, Tags: tags})
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -217,6 +262,46 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/api/clusters/")
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	id, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid cluster id", http.StatusBadRequest)
+		return
+	}
+
+	cluster, members, found, err := s.findClusterByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+
+	type clusterResponse struct {
+		core.Cluster
+		Samples []int64 `json:"samples,omitempty"`
+	}
+	samples := make([]int64, 0, len(members))
+	for _, member := range members {
+		samples = append(samples, member.SampleID)
+	}
+	writeJSON(w, http.StatusOK, clusterResponse{Cluster: cluster, Samples: samples})
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -225,6 +310,36 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func filterSamplesByQuery(samples []core.Sample, query string) []core.Sample {
+	filtered := make([]core.Sample, 0, len(samples))
+	for _, sample := range samples {
+		if strings.Contains(strings.ToLower(sample.Path), query) || strings.Contains(strings.ToLower(sample.FileName), query) {
+			filtered = append(filtered, sample)
+		}
+	}
+	return filtered
+}
+
+func (s *Server) findClusterByID(ctx context.Context, id int64) (core.Cluster, []db.ClusterMember, bool, error) {
+	for _, method := range []string{"kmeans", "dbscan"} {
+		clusters, err := s.repo.ListClustersByMethod(ctx, method)
+		if err != nil {
+			return core.Cluster{}, nil, false, err
+		}
+		for _, cluster := range clusters {
+			if cluster.ID != id {
+				continue
+			}
+			members, err := s.repo.ListClusterMembers(ctx, id)
+			if err != nil {
+				return core.Cluster{}, nil, false, err
+			}
+			return cluster, members, true, nil
+		}
+	}
+	return core.Cluster{}, nil, false, nil
 }
 
 func ListenAndServe(ctx context.Context, addr string, repo *db.Repository) error {

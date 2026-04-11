@@ -62,6 +62,40 @@ func TestServerListsSamplesAndTags(t *testing.T) {
 	}
 }
 
+func TestServerFiltersSamplesByQuery(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	insertSample(t, repo, "impact.wav")
+	insertSample(t, repo, "pad.wav")
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/samples?q=impact", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload []struct {
+		FileName string
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("expected 1 matching sample, got %d", len(payload))
+	}
+	if payload[0].FileName != "impact.wav" {
+		t.Fatalf("expected impact.wav, got %q", payload[0].FileName)
+	}
+}
+
 func TestServerStreamsSampleAudio(t *testing.T) {
 	t.Parallel()
 
@@ -104,10 +138,58 @@ func TestServerStreamsSampleAudio(t *testing.T) {
 	}
 }
 
+func TestServerReturnsClusterByID(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	sampleID := insertSample(t, repo, "tone.wav")
+	clusterID, err := repo.InsertCluster(context.Background(), core.Cluster{
+		Method:     "kmeans",
+		Label:      "Cluster 1",
+		Parameters: map[string]float64{"k": 1},
+	})
+	if err != nil {
+		t.Fatalf("InsertCluster returned error: %v", err)
+	}
+	if err := repo.InsertClusterMember(context.Background(), db.ClusterMember{
+		ClusterID: clusterID,
+		SampleID:  sampleID,
+		Score:     1,
+	}); err != nil {
+		t.Fatalf("InsertClusterMember returned error: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clusters/"+itoa(clusterID), nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload struct {
+		ID      int64
+		Samples []int64
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.ID == 0 || len(payload.Samples) != 1 || payload.Samples[0] != sampleID {
+		t.Fatalf("unexpected cluster payload %#v", payload)
+	}
+}
+
 func testRepository(t *testing.T) *db.Repository {
 	t.Helper()
 
-	database, err := db.Open(context.Background(), db.Options{Path: ":memory:"})
+	database, err := db.Open(context.Background(), db.Options{
+		Path: filepath.Join(t.TempDir(), "zounds.db"),
+	})
 	if err != nil {
 		t.Fatalf("db.Open returned error: %v", err)
 	}

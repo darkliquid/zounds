@@ -2,6 +2,8 @@ package tags_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/darkliquid/zounds/pkg/core"
@@ -11,7 +13,10 @@ import (
 func TestRuleTaggerGeneratesDarkPadAndSubTags(t *testing.T) {
 	t.Parallel()
 
-	tagger := tags.NewRuleTagger()
+	tagger, err := tags.NewRuleTagger()
+	if err != nil {
+		t.Fatalf("new rule tagger: %v", err)
+	}
 	result := core.AnalysisResult{
 		Metrics: map[string]float64{
 			"spectral_centroid_hz":  200,
@@ -36,7 +41,10 @@ func TestRuleTaggerGeneratesDarkPadAndSubTags(t *testing.T) {
 func TestRuleTaggerGeneratesBellGlitchAndHooverTags(t *testing.T) {
 	t.Parallel()
 
-	tagger := tags.NewRuleTagger()
+	tagger, err := tags.NewRuleTagger()
+	if err != nil {
+		t.Fatalf("new rule tagger: %v", err)
+	}
 	result := core.AnalysisResult{
 		Metrics: map[string]float64{
 			"dominant_frequency_hz": 1400,
@@ -56,6 +64,53 @@ func TestRuleTaggerGeneratesBellGlitchAndHooverTags(t *testing.T) {
 	}
 
 	assertTagNames(t, got, "bell", "glitch", "hoover")
+}
+
+func TestRuleTaggerLoadsCustomExprRules(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "rules.json")
+	err := os.WriteFile(path, []byte(`{
+  "rules": [
+    {
+      "tag": "cyberpunk",
+      "expr": "Metrics[\"spectral_flux\"] > 0.1 && Attributes[\"mode\"] == \"minor\"",
+      "confidence": 0.9
+    }
+  ]
+}`), 0o644)
+	if err != nil {
+		t.Fatalf("write rules file: %v", err)
+	}
+
+	tagger, err := tags.NewRuleTaggerFromFile(path)
+	if err != nil {
+		t.Fatalf("new rule tagger from file: %v", err)
+	}
+
+	got, err := tagger.Tags(context.Background(), core.Sample{}, core.AnalysisResult{
+		Metrics:    map[string]float64{"spectral_flux": 0.2},
+		Attributes: map[string]string{"mode": "minor"},
+	})
+	if err != nil {
+		t.Fatalf("rule tags: %v", err)
+	}
+
+	assertTagNames(t, got, "cyberpunk")
+}
+
+func TestRuleTaggerRejectsInvalidRuleConfig(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "rules.json")
+	err := os.WriteFile(path, []byte(`[{"tag":"bad","expr":"Metrics[\"x\"] >"}]`), 0o644)
+	if err != nil {
+		t.Fatalf("write rules file: %v", err)
+	}
+
+	if _, err := tags.NewRuleTaggerFromFile(path); err == nil {
+		t.Fatal("expected invalid expr error")
+	}
 }
 
 func assertTagNames(t *testing.T, got []core.Tag, expected ...string) {

@@ -101,6 +101,62 @@ func TestTagCommandAutoAppliesRuleTags(t *testing.T) {
 	}
 }
 
+func TestTagCommandAutoUsesCustomRuleFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "custom-rules.db")
+	rulePath := filepath.Join(t.TempDir(), "rules.json")
+	samplePath := filepath.Join(root, "Synth", "tone.wav")
+	writeSineWAVFixture(t, samplePath, 220, 1.0)
+
+	err := os.WriteFile(rulePath, []byte(`{
+  "rules": [
+    {
+      "tag": "custom bass",
+      "expr": "Metrics[\"frequency_hz\"] >= 200 && Metrics[\"frequency_hz\"] <= 240 && Metrics[\"confidence\"] > 0.5",
+      "confidence": 0.88
+    }
+  ]
+}`), 0o644)
+	if err != nil {
+		t.Fatalf("write rule file: %v", err)
+	}
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	tagCmd := commands.NewRootCommand()
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto", "--rule-file", rulePath})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute auto tag: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	sample, err := repo.FindSampleByPath(context.Background(), samplePath)
+	if err != nil {
+		t.Fatalf("find sample: %v", err)
+	}
+	got, err := repo.ListTagsForSample(context.Background(), sample.ID)
+	if err != nil {
+		t.Fatalf("list sample tags: %v", err)
+	}
+
+	names := make(map[string]struct{}, len(got))
+	for _, tag := range got {
+		names[tag.NormalizedName] = struct{}{}
+	}
+	if _, ok := names["custom bass"]; !ok {
+		t.Fatalf("missing custom rule tag in %v", names)
+	}
+	if _, ok := names["sub"]; ok {
+		t.Fatalf("expected custom rule file to replace defaults, got %v", names)
+	}
+}
+
 func TestTagCommandAddAndRemoveManualTags(t *testing.T) {
 	t.Parallel()
 

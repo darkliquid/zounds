@@ -25,6 +25,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 		clapEndpoint string
 		clapAPIKey   string
 		clapLabels   []string
+		ruleFile     string
 	)
 
 	cmd := &cobra.Command{
@@ -50,7 +51,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 
 			switch {
 			case auto:
-				return runAutoTagging(ctx, cmd, repo, cfg, path, clapEndpoint, clapAPIKey, clapLabels)
+				return runAutoTagging(ctx, cmd, repo, cfg, path, clapEndpoint, clapAPIKey, clapLabels, ruleFile)
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
@@ -72,11 +73,12 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	flags.StringVar(&clapEndpoint, "clap-endpoint", "", "optional CLAP classifier endpoint for auto-tagging")
 	flags.StringVar(&clapAPIKey, "clap-api-key", "", "optional API key for the CLAP classifier endpoint")
 	flags.StringSliceVar(&clapLabels, "clap-label", nil, "candidate CLAP labels to classify against (repeatable)")
+	flags.StringVar(&ruleFile, "rule-file", "", "optional JSON rule config for expr-based rule tagging")
 
 	return cmd
 }
 
-func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, clapEndpoint, clapAPIKey string, clapLabels []string) error {
+func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, clapEndpoint, clapAPIKey string, clapLabels []string, ruleFile string) error {
 	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
 	if err != nil {
 		return err
@@ -108,7 +110,15 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	}
 	pathTagger := tags.NewPathTagger()
 	metadataTagger := tags.NewMetadataTagger()
-	ruleTagger := tags.NewRuleTagger()
+	var ruleTagger tags.RuleTagger
+	if strings.TrimSpace(ruleFile) != "" {
+		ruleTagger, err = tags.NewRuleTaggerFromFile(ruleFile)
+	} else {
+		ruleTagger, err = tags.NewRuleTagger()
+	}
+	if err != nil {
+		return err
+	}
 	clapTagger := tags.NewCLAPTagger(clapEndpoint, clapAPIKey, clapLabels)
 
 	applied := 0

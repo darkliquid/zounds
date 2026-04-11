@@ -9,7 +9,7 @@ The codebase is library-first: the reusable logic lives under `pkg/`, and the `z
 - scan directories for common audio formats
 - decode WAV, AIFF, FLAC, MP3, and OGG/Vorbis
 - analyze metadata, spectrum, spectral contrast/bandwidth, chroma, tonnetz, HPSS ratios, tempo, pitch, key, MFCC, loudness, ADSR-style dynamics, formants, splice points, waveform shape, harmonicity, quality metrics, and perceptual fingerprints
-- derive tags from paths, embedded metadata, rule-based heuristics, local feature-vector classification, optional CLAP classifier services, and optional OpenAI-compatible LLM inference
+- derive tags from paths, embedded metadata, configurable expr-based rule files, local feature-vector classification, optional CLAP classifier services, and optional OpenAI-compatible LLM inference
 - find exact and perceptual duplicates
 - compute similarity, k-means clusters, DBSCAN clusters, and 2D PCA/t-SNE projections
 - convert sample rate, channel layout, output format, and loudness
@@ -41,7 +41,7 @@ Examples:
 ```bash
 zounds scan ~/Samples
 zounds analyze --all
-zounds tag --auto --clap-endpoint http://localhost:8000
+zounds tag --auto --rule-file ./rules.json --clap-endpoint http://localhost:8000
 zounds cluster --method kmeans --k 12 --projection tsne
 zounds dedup --perceptual --threshold 8
 zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dry-run

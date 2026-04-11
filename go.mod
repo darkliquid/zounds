@@ -20,6 +20,7 @@ require (
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.9.0 // indirect
+	github.com/expr-lang/expr v1.17.6 // indirect
 	github.com/go-audio/riff v1.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect

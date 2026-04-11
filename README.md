@@ -1,33 +1,87 @@
 # zounds
 
-`zounds` is a Go toolkit for scanning and organizing large sound-sample libraries.
+`zounds` is a Go toolkit and CLI for scanning, analyzing, tagging, clustering, deduplicating, transforming, and browsing sound-sample libraries.
 
-Phase 1 establishes the project foundation:
+The codebase is library-first: the reusable logic lives under `pkg/`, and the `zounds` CLI layers workflows on top of it.
 
-- Go module at `github.com/darkliquid/zounds`
-- core domain types and interfaces in `pkg/core`
-- SQLite-backed metadata store with embedded migrations in `pkg/db`
-- concurrent directory scanner for supported audio file extensions in `pkg/scanner`
+## Current capabilities
 
-Phase 2 has started with shared audio buffer/codec abstractions, playback support, and pure-Go codecs for WAV, AIFF, FLAC, MP3, and OGG/Vorbis.
+- scan directories for common audio formats
+- decode WAV, AIFF, FLAC, MP3, and OGG/Vorbis
+- analyze metadata, spectrum, tempo, pitch, key, MFCC, loudness, dynamics, waveform shape, and perceptual fingerprints
+- derive tags from paths, embedded metadata, rule-based heuristics, local feature-vector classification, and optional OpenAI-compatible LLM inference
+- find exact and perceptual duplicates
+- compute similarity, k-means clusters, DBSCAN clusters, and 2D projections
+- convert sample rate, channel layout, output format, and loudness
+- rename and organization-plan samples from templates, tags, and clusters
+- browse and preview indexed samples from the CLI
+- serve an embedded web UI with API endpoints, tag cloud, sample browser, preview playback, and cluster bubble view
 
-Phase 3 has started with reusable metadata, spectral, beat, pitch, key, MFCC, loudness, and dynamics extraction, plus consolidated feature-vector building, including embedded file metadata (for example ID3/Vorbis/FLAC tags), and the tagging layer now includes path-based tag extraction.
+## CLI
 
-## Current layout
+Implemented commands:
 
 ```text
-cmd/zounds         CLI entrypoint placeholder
-cmd/zounds/commands Cobra root command and command tree scaffold
-pkg/core           shared domain types and interfaces
-pkg/audio          PCM buffer, codec interfaces, registries
-pkg/analysis       reusable analyzers, starting with metadata extraction
-pkg/cluster        similarity and clustering building blocks
-pkg/convert        reusable audio transformation helpers (channels, resampling, transcoding, normalization)
-pkg/db             SQLite connection, migrations, repository helpers
-pkg/dedup          exact/perceptual deduplication building blocks
-pkg/rename         template-based rename/reorganization helpers
-pkg/scanner        recursive file discovery for audio samples
-pkg/tags           taggers, starting with path-derived tags
+zounds scan
+zounds analyze
+zounds tag
+zounds cluster
+zounds dedup
+zounds convert
+zounds rename
+zounds export
+zounds info
+zounds play
+zounds browse
+zounds serve
+```
+
+Examples:
+
+```bash
+zounds scan ~/Samples
+zounds analyze --all
+zounds tag --auto
+zounds cluster --method kmeans --k 12
+zounds dedup --perceptual --threshold 8
+zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dry-run
+zounds serve --port 8080
+```
+
+## Library layout
+
+```text
+cmd/zounds/commands  Cobra command implementations
+pkg/analysis         reusable analyzers and feature-vector building
+pkg/audio            PCM buffer, codecs, registry, playback
+pkg/cluster          similarity, k-means, DBSCAN, 2D projection
+pkg/convert          resampling, channel conversion, transcoding, normalization
+pkg/core             shared domain types and interfaces
+pkg/db               SQLite connection, migrations, repository helpers
+pkg/dedup            exact and perceptual dedup logic
+pkg/rename           template rename and organization planning
+pkg/scanner          recursive audio file discovery
+pkg/tags             path, metadata, rule, local, and LLM taggers
+web                  embedded HTTP server and static web UI
+```
+
+## Web UI
+
+`zounds serve` starts the embedded HTTP server and frontend.
+
+Available API routes include:
+
+```text
+GET /api/health
+GET /api/samples
+GET /api/samples?q=...
+GET /api/samples?tag=...
+GET /api/samples/:id
+GET /api/samples/:id/audio
+GET /api/tags
+GET /api/tags/:name/samples
+GET /api/clusters
+GET /api/clusters/:id
 ```
 
 ## Development

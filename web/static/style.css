@@ -100,6 +100,28 @@ button.tag.active {
   padding-left: 0;
 }
 
+.cluster-map {
+  width: 100%;
+  height: auto;
+  margin-bottom: 0.75rem;
+  background: #111827;
+  border-radius: 0.5rem;
+}
+
+.cluster-bubble {
+  fill: rgba(37, 99, 235, 0.45);
+  stroke: #60a5fa;
+  stroke-width: 2;
+}
+
+.cluster-label {
+  fill: #e5e7eb;
+  font-size: 0.55rem;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
 .sample-row {
   display: flex;
   justify-content: space-between;

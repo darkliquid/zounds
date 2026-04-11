@@ -83,12 +83,36 @@ function renderTags() {
 function renderClusters() {
   const root = document.getElementById("clusters");
   root.innerHTML = "";
+  const svg = document.getElementById("cluster-map");
+  svg.innerHTML = "";
+  const maxSize = state.clusters.reduce((max, cluster) => Math.max(max, (cluster.Samples || []).length), 1);
 
-  for (const cluster of state.clusters) {
+  state.clusters.forEach((cluster, index) => {
+    const size = (cluster.Samples || []).length;
     const li = document.createElement("li");
-    li.textContent = `${cluster.Label} (${(cluster.Samples || []).length})`;
+    li.textContent = `${cluster.Label} (${size})`;
     root.appendChild(li);
-  }
+
+    const radius = 18 + (size / maxSize) * 26;
+    const col = index % 3;
+    const row = Math.floor(index / 3);
+    const cx = 48 + col * 86;
+    const cy = 48 + row * 86;
+
+    const bubble = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    bubble.setAttribute("cx", cx);
+    bubble.setAttribute("cy", cy);
+    bubble.setAttribute("r", radius);
+    bubble.setAttribute("class", "cluster-bubble");
+    svg.appendChild(bubble);
+
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("x", cx);
+    label.setAttribute("y", cy);
+    label.setAttribute("class", "cluster-label");
+    label.textContent = cluster.Label;
+    svg.appendChild(label);
+  });
 }
 
 function renderSamples() {

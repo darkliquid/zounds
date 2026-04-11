@@ -40,7 +40,7 @@ func NewRootCommand() *cobra.Command {
 		newPlaceholderCommand("serve", "Run the web UI and API server"),
 		newExportCommand(&cfg),
 		newInfoCommand(&cfg),
-		newPlaceholderCommand("play", "Play a sample or search result"),
+		newPlayCommand(&cfg),
 		newPlaceholderCommand("browse", "Browse the sample library interactively"),
 	)
 

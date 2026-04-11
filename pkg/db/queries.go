@@ -169,6 +169,47 @@ func (r *Repository) ListTagsForSample(ctx context.Context, sampleID int64) ([]c
 	return tags, nil
 }
 
+func (r *Repository) FindSamplesByTag(ctx context.Context, name string) ([]core.Sample, error) {
+	normalized := core.NormalizeTagName(name)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			s.id,
+			s.source_root,
+			s.path,
+			s.relative_path,
+			s.file_name,
+			s.extension,
+			s.format,
+			s.size_bytes,
+			s.modified_at,
+			s.scanned_at
+		FROM samples s
+		JOIN sample_tags st ON st.sample_id = s.id
+		JOIN tags t ON t.id = st.tag_id
+		WHERE t.normalized_name = ?
+		ORDER BY s.path;
+	`, normalized)
+	if err != nil {
+		return nil, fmt.Errorf("find samples by tag %q: %w", normalized, err)
+	}
+	defer rows.Close()
+
+	var samples []core.Sample
+	for rows.Next() {
+		sample, err := scanSample(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan tagged sample: %w", err)
+		}
+		samples = append(samples, sample)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tagged samples: %w", err)
+	}
+
+	return samples, nil
+}
+
 func (r *Repository) DB() *sql.DB {
 	return r.db
 }

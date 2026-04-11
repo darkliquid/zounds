@@ -25,6 +25,7 @@ pkg/cluster        similarity and clustering building blocks
 pkg/convert        reusable audio transformation helpers (channels, resampling, transcoding, normalization)
 pkg/db             SQLite connection, migrations, repository helpers
 pkg/dedup          exact/perceptual deduplication building blocks
+pkg/rename         template-based rename/reorganization helpers
 pkg/scanner        recursive file discovery for audio samples
 pkg/tags           taggers, starting with path-derived tags
 ```

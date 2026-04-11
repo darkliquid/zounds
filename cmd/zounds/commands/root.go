@@ -35,7 +35,7 @@ func NewRootCommand() *cobra.Command {
 		newTagCommand(&cfg),
 		newPlaceholderCommand("cluster", "Cluster related sounds"),
 		newPlaceholderCommand("dedup", "Find exact or perceptual duplicates"),
-		newPlaceholderCommand("convert", "Convert, resample, or normalize audio"),
+		newConvertCommand(&cfg),
 		newPlaceholderCommand("rename", "Mass rename and reorganize library files"),
 		newPlaceholderCommand("serve", "Run the web UI and API server"),
 		newExportCommand(&cfg),

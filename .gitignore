@@ -1,0 +1,6 @@
+zounds.db
+*.db
+*.sqlite
+*.sqlite3
+dist/
+bin/

@@ -11,7 +11,6 @@ import (
 	"github.com/dhowden/tag"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
-	"github.com/darkliquid/zounds/pkg/audio/codecs"
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
@@ -41,12 +40,10 @@ type EmbeddedMetadata struct {
 }
 
 func NewMetadataAnalyzer(registry *zaudio.Registry) (*MetadataAnalyzer, error) {
-	if registry == nil {
-		var err error
-		registry, err = codecs.NewRegistry()
-		if err != nil {
-			return nil, fmt.Errorf("create default codec registry: %w", err)
-		}
+	var err error
+	registry, err = defaultRegistry(registry)
+	if err != nil {
+		return nil, err
 	}
 
 	return &MetadataAnalyzer{registry: registry}, nil
@@ -65,7 +62,7 @@ func (a *MetadataAnalyzer) Analyze(ctx context.Context, sample core.Sample) (cor
 		return core.AnalysisResult{}, fmt.Errorf("metadata analyzer is not initialized")
 	}
 
-	decoded, err := zaudio.DecodeFile(ctx, a.registry, sample.Path)
+	decoded, err := decodeSample(ctx, a.registry, sample)
 	if err != nil {
 		return core.AnalysisResult{}, fmt.Errorf("analyze metadata for %q: %w", sample.Path, err)
 	}

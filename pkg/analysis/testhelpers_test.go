@@ -1,0 +1,38 @@
+package analysis_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/audio/wav"
+)
+
+func writeAnalysisWAV(t *testing.T, path string, buffer zaudio.PCMBuffer) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create wav file: %v", err)
+	}
+	if err := wav.New().Encode(context.Background(), file, buffer); err != nil {
+		t.Fatalf("encode wav file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close wav file: %v", err)
+	}
+}
+
+func fillBuffer(length int, value float64) []float64 {
+	data := make([]float64, length)
+	for i := range data {
+		data[i] = value
+	}
+	return data
+}

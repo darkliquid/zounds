@@ -21,7 +21,7 @@ cmd/zounds/commands Cobra root command and command tree scaffold
 pkg/core           shared domain types and interfaces
 pkg/audio          PCM buffer, codec interfaces, registries
 pkg/analysis       reusable analyzers, starting with metadata extraction
-pkg/convert        reusable audio transformation helpers
+pkg/convert        reusable audio transformation helpers (channels, resampling)
 pkg/db             SQLite connection, migrations, repository helpers
 pkg/dedup          exact/perceptual deduplication building blocks
 pkg/scanner        recursive file discovery for audio samples

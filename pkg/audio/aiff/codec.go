@@ -1,11 +1,11 @@
-package wav
+package aiff
 
 import (
 	"context"
 	"fmt"
 	"io"
 
-	gowav "github.com/go-audio/wav"
+	goaiff "github.com/go-audio/aiff"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/core"
@@ -18,7 +18,7 @@ func New() Codec {
 }
 
 func (Codec) Format() core.AudioFormat {
-	return core.FormatWAV
+	return core.FormatAIFF
 }
 
 func (Codec) Decode(ctx context.Context, reader io.ReadSeeker) (zaudio.DecodeResult, error) {
@@ -28,26 +28,29 @@ func (Codec) Decode(ctx context.Context, reader io.ReadSeeker) (zaudio.DecodeRes
 	default:
 	}
 
-	decoder := gowav.NewDecoder(reader)
+	decoder := goaiff.NewDecoder(reader)
 	if !decoder.IsValidFile() {
-		return zaudio.DecodeResult{}, fmt.Errorf("decode wav: invalid file")
+		return zaudio.DecodeResult{}, fmt.Errorf("decode aiff: invalid file")
 	}
 
 	intBuffer, err := decoder.FullPCMBuffer()
 	if err != nil {
-		return zaudio.DecodeResult{}, fmt.Errorf("decode wav pcm buffer: %w", err)
+		return zaudio.DecodeResult{}, fmt.Errorf("decode aiff pcm buffer: %w", err)
 	}
 
-	buffer, err := zaudio.IntBufferToPCM(intBuffer, intBuffer.SourceBitDepth)
+	buffer, err := zaudio.IntBufferToPCM(intBuffer, int(decoder.SampleBitDepth()))
 	if err != nil {
-		return zaudio.DecodeResult{}, fmt.Errorf("decode wav pcm conversion: %w", err)
+		return zaudio.DecodeResult{}, fmt.Errorf("decode aiff pcm conversion: %w", err)
 	}
-	buffer.Metadata = map[string]string{"codec": "wav"}
+
+	buffer.Metadata = map[string]string{
+		"codec": "aiff",
+	}
 
 	return zaudio.DecodeResult{
 		Buffer: buffer,
 		Info: zaudio.StreamInfo{
-			Format:     core.FormatWAV,
+			Format:     core.FormatAIFF,
 			SampleRate: buffer.SampleRate,
 			Channels:   buffer.Channels,
 			BitDepth:   buffer.BitDepth,
@@ -63,21 +66,17 @@ func (Codec) Encode(ctx context.Context, writer io.WriteSeeker, buffer zaudio.PC
 	default:
 	}
 
-	if err := buffer.Validate(); err != nil {
-		return fmt.Errorf("encode wav: %w", err)
-	}
-
 	intBuffer, err := zaudio.PCMToIntBuffer(buffer)
 	if err != nil {
-		return fmt.Errorf("encode wav: %w", err)
+		return fmt.Errorf("encode aiff: %w", err)
 	}
 
-	encoder := gowav.NewEncoder(writer, buffer.SampleRate, intBuffer.SourceBitDepth, buffer.Channels, 1)
+	encoder := goaiff.NewEncoder(writer, buffer.SampleRate, intBuffer.SourceBitDepth, buffer.Channels)
 	if err := encoder.Write(intBuffer); err != nil {
-		return fmt.Errorf("encode wav buffer: %w", err)
+		return fmt.Errorf("encode aiff buffer: %w", err)
 	}
 	if err := encoder.Close(); err != nil {
-		return fmt.Errorf("finalize wav file: %w", err)
+		return fmt.Errorf("finalize aiff file: %w", err)
 	}
 
 	return nil

@@ -17,11 +17,14 @@ import (
 
 func newTagCommand(cfg *Config) *cobra.Command {
 	var (
-		auto       bool
-		list       bool
-		path       string
-		addTags    []string
-		removeTags []string
+		auto         bool
+		list         bool
+		path         string
+		addTags      []string
+		removeTags   []string
+		clapEndpoint string
+		clapAPIKey   string
+		clapLabels   []string
 	)
 
 	cmd := &cobra.Command{
@@ -47,7 +50,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 
 			switch {
 			case auto:
-				return runAutoTagging(ctx, cmd, repo, cfg, path)
+				return runAutoTagging(ctx, cmd, repo, cfg, path, clapEndpoint, clapAPIKey, clapLabels)
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
@@ -66,11 +69,14 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	flags.StringVar(&path, "path", "", "sample path to target for add/remove or auto-tagging one file")
 	flags.StringSliceVar(&addTags, "add", nil, "manually add one or more tags")
 	flags.StringSliceVar(&removeTags, "remove", nil, "manually remove one or more tags")
+	flags.StringVar(&clapEndpoint, "clap-endpoint", "", "optional CLAP classifier endpoint for auto-tagging")
+	flags.StringVar(&clapAPIKey, "clap-api-key", "", "optional API key for the CLAP classifier endpoint")
+	flags.StringSliceVar(&clapLabels, "clap-label", nil, "candidate CLAP labels to classify against (repeatable)")
 
 	return cmd
 }
 
-func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath string) error {
+func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, clapEndpoint, clapAPIKey string, clapLabels []string) error {
 	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
 	if err != nil {
 		return err
@@ -92,13 +98,22 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	if err != nil {
 		return err
 	}
+	keyAnalyzer, err := analysis.NewKeyAnalyzer(nil)
+	if err != nil {
+		return err
+	}
+	harmonicsAnalyzer, err := analysis.NewHarmonicsAnalyzer(nil)
+	if err != nil {
+		return err
+	}
 	pathTagger := tags.NewPathTagger()
 	metadataTagger := tags.NewMetadataTagger()
 	ruleTagger := tags.NewRuleTagger()
+	clapTagger := tags.NewCLAPTagger(clapEndpoint, clapAPIKey, clapLabels)
 
 	applied := 0
 	for _, sample := range samples {
-		results := make([]core.AnalysisResult, 0, 4)
+		results := make([]core.AnalysisResult, 0, 6)
 		result, err := analyzer.Analyze(ctx, sample)
 		if err != nil {
 			return err
@@ -119,6 +134,16 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 			return err
 		}
 		results = append(results, pitchResult)
+		keyResult, err := keyAnalyzer.Analyze(ctx, sample)
+		if err != nil {
+			return err
+		}
+		results = append(results, keyResult)
+		harmonicsResult, err := harmonicsAnalyzer.Analyze(ctx, sample)
+		if err != nil {
+			return err
+		}
+		results = append(results, harmonicsResult)
 
 		combined := combineAnalysisResults(sample.ID, results...)
 
@@ -138,6 +163,13 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		generated = append(generated, pathTags...)
 		generated = append(generated, metadataTags...)
 		generated = append(generated, ruleTags...)
+		if strings.TrimSpace(clapEndpoint) != "" {
+			clapTags, err := clapTagger.Tags(ctx, sample, combined)
+			if err != nil {
+				return err
+			}
+			generated = append(generated, clapTags...)
+		}
 		generated = dedupeGeneratedTags(generated)
 
 		if cfg.DryRun {

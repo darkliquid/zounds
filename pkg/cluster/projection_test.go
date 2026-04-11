@@ -1,6 +1,7 @@
 package cluster_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/darkliquid/zounds/pkg/cluster"
@@ -39,5 +40,27 @@ func TestProject2DRejectsDimensionMismatch(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected dimension mismatch error")
+	}
+}
+
+func TestProjectTSNE2DProducesFiniteCoordinates(t *testing.T) {
+	t.Parallel()
+
+	points, err := cluster.ProjectTSNE2D([]core.FeatureVector{
+		{SampleID: 1, Values: []float64{0, 0, 0}},
+		{SampleID: 2, Values: []float64{5, 0, 0}},
+		{SampleID: 3, Values: []float64{0, 5, 0}},
+		{SampleID: 4, Values: []float64{5, 5, 0}},
+	}, cluster.TSNEOptions{Iterations: 250, Seed: 7})
+	if err != nil {
+		t.Fatalf("project tsne 2d: %v", err)
+	}
+	if len(points) != 4 {
+		t.Fatalf("expected 4 points, got %d", len(points))
+	}
+	for _, point := range points {
+		if math.IsNaN(point.X) || math.IsNaN(point.Y) || math.IsInf(point.X, 0) || math.IsInf(point.Y, 0) {
+			t.Fatalf("unexpected point %+v", point)
+		}
 	}
 }

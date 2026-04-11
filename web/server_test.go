@@ -184,6 +184,79 @@ func TestServerReturnsClusterByID(t *testing.T) {
 	}
 }
 
+func TestServerProjectsClustersForVisualization(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	sample1 := insertSample(t, repo, "tone-1.wav")
+	sample2 := insertSample(t, repo, "tone-2.wav")
+	_, err := repo.ReplaceFeatureVector(context.Background(), core.FeatureVector{
+		SampleID:   sample1,
+		Namespace:  "analysis",
+		Version:    "test",
+		Values:     []float64{0, 0, 0},
+		Dimensions: 3,
+		CreatedAt:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("ReplaceFeatureVector sample1 returned error: %v", err)
+	}
+	_, err = repo.ReplaceFeatureVector(context.Background(), core.FeatureVector{
+		SampleID:   sample2,
+		Namespace:  "analysis",
+		Version:    "test",
+		Values:     []float64{5, 5, 0},
+		Dimensions: 3,
+		CreatedAt:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("ReplaceFeatureVector sample2 returned error: %v", err)
+	}
+
+	clusterID, err := repo.InsertCluster(context.Background(), core.Cluster{
+		Method:     "kmeans",
+		Label:      "Cluster 1",
+		Parameters: map[string]float64{"k": 1},
+	})
+	if err != nil {
+		t.Fatalf("InsertCluster returned error: %v", err)
+	}
+	for _, sampleID := range []int64{sample1, sample2} {
+		if err := repo.InsertClusterMember(context.Background(), db.ClusterMember{
+			ClusterID: clusterID,
+			SampleID:  sampleID,
+			Score:     1,
+		}); err != nil {
+			t.Fatalf("InsertClusterMember returned error: %v", err)
+		}
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clusters?projection=tsne", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload []struct {
+		ID int64
+		X  float64
+		Y  float64
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 || payload[0].ID == 0 {
+		t.Fatalf("unexpected cluster payload %#v", payload)
+	}
+}
+
 func testRepository(t *testing.T) *db.Repository {
 	t.Helper()
 

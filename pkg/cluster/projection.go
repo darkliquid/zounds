@@ -14,6 +14,17 @@ type ProjectionPoint struct {
 	Y        float64
 }
 
+func Project2DByMethod(vectors []core.FeatureVector, method string) ([]ProjectionPoint, error) {
+	switch method {
+	case "", "pca":
+		return Project2D(vectors)
+	case "tsne":
+		return ProjectTSNE2D(vectors, TSNEOptions{})
+	default:
+		return nil, fmt.Errorf("project 2d: unsupported projection method %q", method)
+	}
+}
+
 func Project2D(vectors []core.FeatureVector) ([]ProjectionPoint, error) {
 	if len(vectors) == 0 {
 		return nil, nil

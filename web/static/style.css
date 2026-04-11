@@ -28,7 +28,8 @@ main {
   align-items: end;
 }
 
-.controls input {
+.controls input,
+.controls select {
   display: block;
   margin-top: 0.35rem;
   padding: 0.6rem 0.75rem;

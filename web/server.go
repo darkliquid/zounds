@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/darkliquid/zounds/pkg/cluster"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
 )
@@ -233,6 +234,10 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	if method == "" {
 		method = "kmeans"
 	}
+	projection := strings.TrimSpace(r.URL.Query().Get("projection"))
+	if projection == "" {
+		projection = "tsne"
+	}
 
 	clusters, err := s.repo.ListClustersByMethod(r.Context(), method)
 	if err != nil {
@@ -243,6 +248,14 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	type clusterResponse struct {
 		core.Cluster
 		Samples []int64 `json:"samples,omitempty"`
+		X       float64 `json:"x,omitempty"`
+		Y       float64 `json:"y,omitempty"`
+	}
+
+	pointBySample, err := s.projectClusterMembers(r.Context(), projection)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 
 	out := make([]clusterResponse, 0, len(clusters))
@@ -253,13 +266,39 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		samples := make([]int64, 0, len(members))
+		var sumX, sumY float64
 		for _, member := range members {
 			samples = append(samples, member.SampleID)
+			if point, ok := pointBySample[member.SampleID]; ok {
+				sumX += point.X
+				sumY += point.Y
+			}
 		}
-		out = append(out, clusterResponse{Cluster: cluster, Samples: samples})
+		response := clusterResponse{Cluster: cluster, Samples: samples}
+		if len(samples) > 0 {
+			response.X = sumX / float64(len(samples))
+			response.Y = sumY / float64(len(samples))
+		}
+		out = append(out, response)
 	}
 
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) projectClusterMembers(ctx context.Context, method string) (map[int64]cluster.ProjectionPoint, error) {
+	vectors, err := s.repo.ListFeatureVectors(ctx, "analysis")
+	if err != nil {
+		return nil, err
+	}
+	points, err := cluster.Project2DByMethod(vectors, method)
+	if err != nil {
+		return nil, err
+	}
+	pointBySample := make(map[int64]cluster.ProjectionPoint, len(points))
+	for _, point := range points {
+		pointBySample[point.SampleID] = point
+	}
+	return pointBySample, nil
 }
 
 func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {

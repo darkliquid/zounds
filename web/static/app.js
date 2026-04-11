@@ -1,6 +1,7 @@
 const state = {
   tag: "",
   query: "",
+  projection: "tsne",
   samples: [],
   tags: [],
   clusters: [],
@@ -86,6 +87,7 @@ function renderClusters() {
   const svg = document.getElementById("cluster-map");
   svg.innerHTML = "";
   const maxSize = state.clusters.reduce((max, cluster) => Math.max(max, (cluster.Samples || []).length), 1);
+  const positions = normalizeClusterPositions(state.clusters);
 
   state.clusters.forEach((cluster, index) => {
     const size = (cluster.Samples || []).length;
@@ -94,10 +96,9 @@ function renderClusters() {
     root.appendChild(li);
 
     const radius = 18 + (size / maxSize) * 26;
-    const col = index % 3;
-    const row = Math.floor(index / 3);
-    const cx = 48 + col * 86;
-    const cy = 48 + row * 86;
+    const point = positions[index];
+    const cx = point.x;
+    const cy = point.y;
 
     const bubble = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     bubble.setAttribute("cx", cx);
@@ -113,6 +114,35 @@ function renderClusters() {
     label.textContent = cluster.Label;
     svg.appendChild(label);
   });
+}
+
+function normalizeClusterPositions(clusters) {
+  if (!clusters.length) {
+    return [];
+  }
+
+  const allHaveProjection = clusters.every((cluster) => Number.isFinite(cluster.x) && Number.isFinite(cluster.y));
+  if (!allHaveProjection) {
+    return clusters.map((_, index) => {
+      const col = index % 3;
+      const row = Math.floor(index / 3);
+      return { x: 48 + col * 86, y: 48 + row * 86 };
+    });
+  }
+
+  const xs = clusters.map((cluster) => cluster.x);
+  const ys = clusters.map((cluster) => cluster.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+
+  return clusters.map((cluster) => ({
+    x: 28 + ((cluster.x - minX) / spanX) * 224,
+    y: 28 + ((cluster.y - minY) / spanY) * 184,
+  }));
 }
 
 function renderSamples() {
@@ -179,9 +209,15 @@ function showPreview(sample) {
 
 async function main() {
   const search = document.getElementById("search");
+  const projection = document.getElementById("projection");
   search.addEventListener("input", async (event) => {
     state.query = event.target.value.trim();
     await refreshSamples();
+  });
+  projection.addEventListener("change", async (event) => {
+    state.projection = event.target.value;
+    state.clusters = await loadJSON(`/api/clusters?projection=${encodeURIComponent(state.projection)}`);
+    renderClusters();
   });
 
   document.getElementById("clear-filters").addEventListener("click", async () => {
@@ -194,7 +230,7 @@ async function main() {
 
   const [tags, clusters] = await Promise.all([
     loadJSON("/api/tags"),
-    loadJSON("/api/clusters"),
+    loadJSON(`/api/clusters?projection=${encodeURIComponent(state.projection)}`),
   ]);
   state.tags = tags;
   state.clusters = clusters;

@@ -33,7 +33,7 @@ func NewRootCommand() *cobra.Command {
 		newScanCommand(&cfg),
 		newAnalyzeCommand(&cfg),
 		newTagCommand(&cfg),
-		newPlaceholderCommand("cluster", "Cluster related sounds"),
+		newClusterCommand(&cfg),
 		newPlaceholderCommand("dedup", "Find exact or perceptual duplicates"),
 		newConvertCommand(&cfg),
 		newPlaceholderCommand("rename", "Mass rename and reorganize library files"),

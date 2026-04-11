@@ -22,6 +22,7 @@ pkg/core           shared domain types and interfaces
 pkg/audio          PCM buffer, codec interfaces, registries
 pkg/analysis       reusable analyzers, starting with metadata extraction
 pkg/db             SQLite connection, migrations, repository helpers
+pkg/dedup          exact/perceptual deduplication building blocks
 pkg/scanner        recursive file discovery for audio samples
 pkg/tags           taggers, starting with path-derived tags
 ```

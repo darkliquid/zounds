@@ -1,0 +1,27 @@
+body {
+  font-family: sans-serif;
+  margin: 0;
+  background: #111827;
+  color: #e5e7eb;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.lede {
+  color: #9ca3af;
+}
+
+section {
+  margin-top: 2rem;
+  padding: 1rem;
+  background: #1f2937;
+  border-radius: 0.5rem;
+}
+
+ul {
+  padding-left: 1.25rem;
+}

@@ -32,7 +32,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(
 		newScanCommand(&cfg),
 		newPlaceholderCommand("analyze", "Run analyzers against indexed samples"),
-		newPlaceholderCommand("tag", "Manage and infer sample tags"),
+		newTagCommand(&cfg),
 		newPlaceholderCommand("cluster", "Cluster related sounds"),
 		newPlaceholderCommand("dedup", "Find exact or perceptual duplicates"),
 		newPlaceholderCommand("convert", "Convert, resample, or normalize audio"),

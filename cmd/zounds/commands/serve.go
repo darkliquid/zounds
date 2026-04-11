@@ -34,7 +34,7 @@ func runServe(ctx context.Context, cfg *Config, addr string, port int) error {
 	if err != nil {
 		return err
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 
 	if port <= 0 {
 		return fmt.Errorf("port must be greater than zero")

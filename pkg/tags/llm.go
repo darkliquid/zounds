@@ -87,7 +87,7 @@ func (t LLMTagger) Tags(ctx context.Context, sample core.Sample, result core.Ana
 	if err != nil {
 		return nil, fmt.Errorf("send llm request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("llm request failed: status %s", resp.Status)

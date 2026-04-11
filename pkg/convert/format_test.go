@@ -96,7 +96,7 @@ func writePCMFixture(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("create fixture: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	buffer := zaudio.PCMBuffer{
 		SampleRate: 44100,

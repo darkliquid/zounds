@@ -1,10 +1,6 @@
 package commands
 
-import (
-	"fmt"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 const version = "0.1.0"
 
@@ -45,14 +41,4 @@ func NewRootCommand() *cobra.Command {
 	)
 
 	return cmd
-}
-
-func newPlaceholderCommand(use, short string) *cobra.Command {
-	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("%s command is scaffolded but not implemented yet", cmd.Name())
-		},
-	}
 }

@@ -34,7 +34,7 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			samples, err := selectSamplesForAnalysis(ctx, repo, analyzeAll, id)
 			if err != nil {

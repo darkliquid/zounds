@@ -42,7 +42,7 @@ func DecodeFile(ctx context.Context, registry *Registry, path string) (DecodeRes
 	if err != nil {
 		return DecodeResult{}, fmt.Errorf("open %q: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return decoder.Decode(ctx, file)
 }

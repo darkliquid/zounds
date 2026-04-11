@@ -39,7 +39,7 @@ func TestAIFFCodecRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open temp aiff file: %v", err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 
 	decoded, err := codec.Decode(context.Background(), opened)
 	if err != nil {

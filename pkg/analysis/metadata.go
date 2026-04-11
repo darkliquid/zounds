@@ -144,7 +144,7 @@ func ReadEmbeddedMetadata(path string) (EmbeddedMetadata, error) {
 	if err != nil {
 		return EmbeddedMetadata{}, fmt.Errorf("open file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	metadata, err := tag.ReadFrom(file)
 	if err != nil {

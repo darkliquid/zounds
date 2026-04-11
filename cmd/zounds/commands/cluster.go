@@ -31,7 +31,7 @@ func newClusterCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			vectors, err := repo.ListFeatureVectors(ctx, "analysis")
 			if err != nil {

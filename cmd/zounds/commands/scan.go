@@ -39,7 +39,7 @@ func newScanCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			for _, sample := range samples {
 				if _, err := repo.UpsertSample(ctx, sample); err != nil {

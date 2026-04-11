@@ -19,7 +19,7 @@ func TestOpenAppliesMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	expectedTables := []string{
 		"samples",
@@ -48,7 +48,7 @@ func TestRepositoryUpsertAndListSamples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	repo := db.NewRepository(database)
 	modifiedAt := time.Date(2026, 4, 11, 16, 0, 0, 0, time.UTC)
@@ -97,7 +97,7 @@ func TestFindSampleByPathReturnsNoRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	repo := db.NewRepository(database)
 	_, err = repo.FindSampleByPath(ctx, "/missing.wav")

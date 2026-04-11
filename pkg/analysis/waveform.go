@@ -70,17 +70,14 @@ func classifyWaveform(spectral SpectralStats, dynamics DynamicsStats, pitch Pitc
 	percussive := percussiveScore(spectral, dynamics, pitch)
 	noise := noiseScore(spectral, dynamics, pitch)
 
-	classification := "mixed"
+	classification := "tonal"
 	best := tonal
 	if percussive > best {
 		classification = "percussive"
 		best = percussive
-	} else {
-		classification = "tonal"
 	}
 	if noise > best {
 		classification = "noise"
-		best = noise
 	}
 
 	texture := "hybrid"

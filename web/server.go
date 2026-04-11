@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"path"
 	"strconv"
 	"strings"
 
@@ -407,8 +406,4 @@ func ListenAndServe(ctx context.Context, addr string, repo *db.Repository) error
 		}
 		return err
 	}
-}
-
-func staticAssetPath(name string) string {
-	return path.Clean("/" + strings.TrimSpace(name))
 }

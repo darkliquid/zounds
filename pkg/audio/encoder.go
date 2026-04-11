@@ -28,7 +28,7 @@ func EncodeFile(ctx context.Context, registry *Registry, path string, buffer PCM
 	if err != nil {
 		return fmt.Errorf("create %q: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return encoder.Encode(ctx, file, buffer)
 }

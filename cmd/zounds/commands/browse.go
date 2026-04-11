@@ -36,7 +36,7 @@ func newBrowseCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			query := ""
 			if len(args) == 1 {

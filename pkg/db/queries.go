@@ -100,7 +100,7 @@ func (r *Repository) ListTagUsage(ctx context.Context) ([]TagUsage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list tag usage: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var usages []TagUsage
 	for rows.Next() {
@@ -147,7 +147,7 @@ func (r *Repository) ListTagsForSample(ctx context.Context, sampleID int64) ([]c
 	if err != nil {
 		return nil, fmt.Errorf("list tags for sample %d: %w", sampleID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tags []core.Tag
 	for rows.Next() {
@@ -192,7 +192,7 @@ func (r *Repository) FindSamplesByTag(ctx context.Context, name string) ([]core.
 	if err != nil {
 		return nil, fmt.Errorf("find samples by tag %q: %w", normalized, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var samples []core.Sample
 	for rows.Next() {

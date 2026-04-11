@@ -25,7 +25,7 @@ func (r *Repository) ListFeatureVectors(ctx context.Context, namespace string) (
 	if err != nil {
 		return nil, fmt.Errorf("list feature vectors for namespace %q: %w", namespace, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var vectors []core.FeatureVector
 	for rows.Next() {
@@ -108,7 +108,7 @@ func (r *Repository) ListClustersByMethod(ctx context.Context, method string) ([
 	if err != nil {
 		return nil, fmt.Errorf("list clusters by method %q: %w", method, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var clusters []core.Cluster
 	for rows.Next() {
@@ -143,7 +143,7 @@ func (r *Repository) ListClusterMembers(ctx context.Context, clusterID int64) ([
 	if err != nil {
 		return nil, fmt.Errorf("list cluster members for cluster %d: %w", clusterID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var members []ClusterMember
 	for rows.Next() {

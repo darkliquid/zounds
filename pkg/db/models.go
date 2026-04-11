@@ -82,7 +82,7 @@ func (r *Repository) ListSamples(ctx context.Context) ([]core.Sample, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list samples: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var samples []core.Sample
 	for rows.Next() {
@@ -224,7 +224,7 @@ func (r *Repository) ListFeatureVectorsForSample(ctx context.Context, sampleID i
 	if err != nil {
 		return nil, fmt.Errorf("list feature vectors for sample %d: %w", sampleID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var vectors []core.FeatureVector
 	for rows.Next() {

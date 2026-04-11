@@ -31,7 +31,7 @@ func newRenameCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			samples, err := selectSamplesForTagging(ctx, repo, targetPath)
 			if err != nil {

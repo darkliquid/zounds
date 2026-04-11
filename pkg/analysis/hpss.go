@@ -3,7 +3,6 @@ package analysis
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"time"
 
@@ -130,8 +129,10 @@ func computeHPSSStats(buffer zaudio.PCMBuffer) HPSSStats {
 			mag := spectrogram[t][f]
 			hMask := hMedian / denom
 			pMask := pMedian / denom
-			harmonicEnergy += math.Pow(mag*hMask, 2)
-			percussiveEnergy += math.Pow(mag*pMask, 2)
+			harmonic := mag * hMask
+			percussive := mag * pMask
+			harmonicEnergy += harmonic * harmonic
+			percussiveEnergy += percussive * percussive
 		}
 	}
 

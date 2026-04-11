@@ -35,7 +35,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			samples, err := repo.ListSamples(ctx)
 			if err != nil {

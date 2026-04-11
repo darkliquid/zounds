@@ -27,7 +27,7 @@ func newExportCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closer.Close()
+			defer func() { _ = closer.Close() }()
 
 			samples, err := repo.ListSamples(ctx)
 			if err != nil {
@@ -38,7 +38,7 @@ func newExportCommand(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer writerCloser.Close()
+			defer func() { _ = writerCloser.Close() }()
 
 			switch format {
 			case "json":

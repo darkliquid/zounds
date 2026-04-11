@@ -54,7 +54,7 @@ func resolvePlaybackTarget(ctx context.Context, cfg *Config, input string) (stri
 	if err != nil {
 		return "", err
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 
 	samples, err := repo.FindSamplesByTag(ctx, input)
 	if err != nil {

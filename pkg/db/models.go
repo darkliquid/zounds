@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -161,6 +162,18 @@ func (r *Repository) DeleteSampleByID(ctx context.Context, id int64) error {
 		WHERE id = ?;
 	`, id); err != nil {
 		return fmt.Errorf("delete sample %d: %w", id, err)
+	}
+	return nil
+}
+
+func (r *Repository) UpdateSampleLocation(ctx context.Context, id int64, path, relativePath, fileName string, format core.AudioFormat, sizeBytes int64, modifiedAt time.Time) error {
+	extension := strings.TrimPrefix(filepath.Ext(fileName), ".")
+	if _, err := r.db.ExecContext(ctx, `
+		UPDATE samples
+		SET path = ?, relative_path = ?, file_name = ?, extension = ?, format = ?, size_bytes = ?, modified_at = ?
+		WHERE id = ?;
+	`, path, relativePath, fileName, extension, string(format), sizeBytes, timeToValue(modifiedAt), id); err != nil {
+		return fmt.Errorf("update sample location %d: %w", id, err)
 	}
 	return nil
 }

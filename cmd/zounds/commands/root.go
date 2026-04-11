@@ -36,7 +36,7 @@ func NewRootCommand() *cobra.Command {
 		newClusterCommand(&cfg),
 		newDedupCommand(&cfg),
 		newConvertCommand(&cfg),
-		newPlaceholderCommand("rename", "Mass rename and reorganize library files"),
+		newRenameCommand(&cfg),
 		newPlaceholderCommand("serve", "Run the web UI and API server"),
 		newExportCommand(&cfg),
 		newInfoCommand(&cfg),

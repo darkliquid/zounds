@@ -12,7 +12,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const beatAnalyzerVersion = "0.1.0"
+const beatAnalyzerVersion = "0.2.0"
 
 type BeatAnalyzer struct {
 	registry *zaudio.Registry
@@ -148,7 +148,7 @@ func onsetEnvelope(samples []float64, windowSize, hopSize int) []float64 {
 		if prev != nil {
 			var flux float64
 			for i := range mags {
-				diff := mags[i] - prev[i]
+				diff := mags[i] - maxFilteredReference(prev, i)
 				if diff > 0 {
 					flux += diff
 				}
@@ -163,6 +163,20 @@ func onsetEnvelope(samples []float64, windowSize, hopSize int) []float64 {
 	}
 
 	return normalizeEnvelope(envelope)
+}
+
+// maxFilteredReference applies the small frequency-axis max filter used by
+// SuperFlux-style onset detection to reduce vibrato-driven false positives.
+func maxFilteredReference(previous []float64, index int) float64 {
+	start := maxInt(0, index-1)
+	end := minInt(len(previous), index+2)
+	reference := previous[start]
+	for i := start + 1; i < end; i++ {
+		if previous[i] > reference {
+			reference = previous[i]
+		}
+	}
+	return reference
 }
 
 func strongestTempoLag(envelope []float64, sampleRate, hopSize, minBPM, maxBPM int) int {

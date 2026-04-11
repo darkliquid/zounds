@@ -8,10 +8,10 @@ The codebase is library-first: the reusable logic lives under `pkg/`, and the `z
 
 - scan directories for common audio formats
 - decode WAV, AIFF, FLAC, MP3, and OGG/Vorbis
-- analyze metadata, spectrum, tempo, pitch, key, MFCC, loudness, dynamics, waveform shape, and perceptual fingerprints
-- derive tags from paths, embedded metadata, rule-based heuristics, local feature-vector classification, and optional OpenAI-compatible LLM inference
+- analyze metadata, spectrum, spectral contrast/bandwidth, chroma, tonnetz, HPSS ratios, tempo, pitch, key, MFCC, loudness, ADSR-style dynamics, formants, splice points, waveform shape, harmonicity, quality metrics, and perceptual fingerprints
+- derive tags from paths, embedded metadata, rule-based heuristics, local feature-vector classification, optional CLAP classifier services, and optional OpenAI-compatible LLM inference
 - find exact and perceptual duplicates
-- compute similarity, k-means clusters, DBSCAN clusters, and 2D projections
+- compute similarity, k-means clusters, DBSCAN clusters, and 2D PCA/t-SNE projections
 - convert sample rate, channel layout, output format, and loudness
 - rename and organization-plan samples from templates, tags, and clusters
 - browse and preview indexed samples from the CLI
@@ -41,8 +41,8 @@ Examples:
 ```bash
 zounds scan ~/Samples
 zounds analyze --all
-zounds tag --auto
-zounds cluster --method kmeans --k 12
+zounds tag --auto --clap-endpoint http://localhost:8000
+zounds cluster --method kmeans --k 12 --projection tsne
 zounds dedup --perceptual --threshold 8
 zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dry-run
 zounds serve --port 8080
@@ -54,14 +54,14 @@ zounds serve --port 8080
 cmd/zounds/commands  Cobra command implementations
 pkg/analysis         reusable analyzers and feature-vector building
 pkg/audio            PCM buffer, codecs, registry, playback
-pkg/cluster          similarity, k-means, DBSCAN, 2D projection
+pkg/cluster          similarity, k-means, DBSCAN, PCA and t-SNE projection
 pkg/convert          resampling, channel conversion, transcoding, normalization
 pkg/core             shared domain types and interfaces
 pkg/db               SQLite connection, migrations, repository helpers
 pkg/dedup            exact and perceptual dedup logic
 pkg/rename           template rename and organization planning
 pkg/scanner          recursive audio file discovery
-pkg/tags             path, metadata, rule, local, and LLM taggers
+pkg/tags             path, metadata, rule, local, CLAP, and LLM taggers
 web                  embedded HTTP server and static web UI
 ```
 
@@ -81,6 +81,7 @@ GET /api/samples/:id/audio
 GET /api/tags
 GET /api/tags/:name/samples
 GET /api/clusters
+GET /api/clusters?projection=tsne
 GET /api/clusters/:id
 ```
 

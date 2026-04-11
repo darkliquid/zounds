@@ -120,6 +120,7 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 		func() (core.Analyzer, error) { return analysis.NewHPSSAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewQualityAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewHarmonicsAnalyzer(nil) },
+		func() (core.Analyzer, error) { return analysis.NewFormantAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewSpliceAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(nil) },
 	}

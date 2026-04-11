@@ -8,7 +8,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const featureVectorVersion = "0.6.0"
+const featureVectorVersion = "0.7.0"
 
 var defaultFeatureOrder = []string{
 	"sample_rate",
@@ -55,6 +55,10 @@ var defaultFeatureOrder = []string{
 	"estimated_snr_db",
 	"harmonic_ratio",
 	"inharmonicity",
+	"formant_1_hz",
+	"formant_2_hz",
+	"formant_3_hz",
+	"formant_4_hz",
 	"splice_count",
 	"splice_max_strength",
 	"splice_mean_strength",

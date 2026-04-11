@@ -8,15 +8,49 @@
 </head>
 <body>
   <main>
-    <h1>zounds</h1>
-    <p class="lede">Indexed samples, tags, and clusters from the built-in web API.</p>
+    <header class="hero">
+      <div>
+        <h1>zounds</h1>
+        <p class="lede">Browse indexed samples, filter by tags, inspect clusters, and preview audio from the built-in web UI.</p>
+      </div>
+      <div class="controls">
+        <label>
+          Search
+          <input id="search" type="search" placeholder="impact, pad, glitch...">
+        </label>
+        <button id="clear-filters" type="button">Clear filters</button>
+      </div>
+    </header>
+
     <section>
-      <h2>Samples</h2>
-      <ul id="samples"></ul>
+      <h2>Library</h2>
+      <p id="summary" class="lede"></p>
+      <div id="active-filter" class="filter-chip hidden"></div>
+      <div class="layout">
+        <aside>
+          <h3>Tags</h3>
+          <div id="tags" class="tag-cloud"></div>
+
+          <h3>Clusters</h3>
+          <ul id="clusters" class="plain-list"></ul>
+        </aside>
+
+        <div>
+          <h3>Samples</h3>
+          <ul id="samples" class="sample-list"></ul>
+        </div>
+      </div>
     </section>
+
     <section>
-      <h2>Tags</h2>
-      <ul id="tags"></ul>
+      <h2>Preview</h2>
+      <div id="preview-empty" class="lede">Select a sample to preview it.</div>
+      <div id="preview" class="preview hidden">
+        <h3 id="preview-title"></h3>
+        <p id="preview-path" class="lede"></p>
+        <div id="preview-tags" class="tag-cloud"></div>
+        <audio id="player" controls preload="none"></audio>
+      </div>
     </section>
   </main>
   <script src="/app.js"></script>

@@ -1,3 +1,11 @@
+const state = {
+  tag: "",
+  query: "",
+  samples: [],
+  tags: [],
+  clusters: [],
+};
+
 async function loadJSON(path) {
   const response = await fetch(path);
   if (!response.ok) {
@@ -6,28 +14,166 @@ async function loadJSON(path) {
   return response.json();
 }
 
-function renderList(id, items, render) {
-  const root = document.getElementById(id);
+function setHidden(id, hidden) {
+  document.getElementById(id).classList.toggle("hidden", hidden);
+}
+
+function sampleURL() {
+  const params = new URLSearchParams();
+  if (state.tag) {
+    params.set("tag", state.tag);
+  }
+  if (state.query) {
+    params.set("q", state.query);
+  }
+  const query = params.toString();
+  return query ? `/api/samples?${query}` : "/api/samples";
+}
+
+async function refreshSamples() {
+  state.samples = await loadJSON(sampleURL());
+  renderSamples();
+  renderSummary();
+}
+
+function renderSummary() {
+  const summary = document.getElementById("summary");
+  summary.textContent = `${state.samples.length} sample${state.samples.length === 1 ? "" : "s"} shown`;
+
+  const filter = document.getElementById("active-filter");
+  if (!state.tag && !state.query) {
+    filter.textContent = "";
+    filter.classList.add("hidden");
+    return;
+  }
+
+  const parts = [];
+  if (state.tag) {
+    parts.push(`tag: ${state.tag}`);
+  }
+  if (state.query) {
+    parts.push(`search: ${state.query}`);
+  }
+  filter.textContent = parts.join(" · ");
+  filter.classList.remove("hidden");
+}
+
+function renderTags() {
+  const root = document.getElementById("tags");
   root.innerHTML = "";
-  for (const item of items) {
+
+  for (const entry of state.tags) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = entry.Tag.NormalizedName === state.tag ? "tag active" : "tag";
+    button.textContent = `${entry.Tag.NormalizedName} (${entry.SampleCount})`;
+    button.addEventListener("click", async () => {
+      state.tag = entry.Tag.NormalizedName === state.tag ? "" : entry.Tag.NormalizedName;
+      await refreshSamples();
+      renderTags();
+    });
+    root.appendChild(button);
+  }
+}
+
+function renderClusters() {
+  const root = document.getElementById("clusters");
+  root.innerHTML = "";
+
+  for (const cluster of state.clusters) {
     const li = document.createElement("li");
-    li.textContent = render(item);
+    li.textContent = `${cluster.Label} (${(cluster.Samples || []).length})`;
     root.appendChild(li);
   }
 }
 
-async function main() {
-  const [samples, tags] = await Promise.all([
-    loadJSON("/api/samples"),
-    loadJSON("/api/tags"),
-  ]);
+function renderSamples() {
+  const root = document.getElementById("samples");
+  root.innerHTML = "";
 
-  renderList("samples", samples, (sample) => {
-    const tagNames = (sample.tags || []).map((tag) => tag.NormalizedName).join(", ");
-    return tagNames ? `${sample.FileName} — ${tagNames}` : sample.FileName;
+  for (const sample of state.samples) {
+    const li = document.createElement("li");
+    li.className = "sample-row";
+
+    const meta = document.createElement("div");
+    meta.className = "sample-meta";
+
+    const title = document.createElement("strong");
+    title.textContent = sample.FileName;
+    meta.appendChild(title);
+
+    const path = document.createElement("div");
+    path.className = "sample-path";
+    path.textContent = sample.Path;
+    meta.appendChild(path);
+
+    const tagWrap = document.createElement("div");
+    tagWrap.className = "tag-cloud";
+    for (const tag of sample.tags || []) {
+      const span = document.createElement("span");
+      span.className = "tag";
+      span.textContent = tag.NormalizedName;
+      tagWrap.appendChild(span);
+    }
+    meta.appendChild(tagWrap);
+
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.textContent = "Preview";
+    preview.addEventListener("click", () => showPreview(sample));
+
+    li.appendChild(meta);
+    li.appendChild(preview);
+    root.appendChild(li);
+  }
+}
+
+function showPreview(sample) {
+  setHidden("preview-empty", true);
+  setHidden("preview", false);
+
+  document.getElementById("preview-title").textContent = sample.FileName;
+  document.getElementById("preview-path").textContent = sample.Path;
+
+  const tagRoot = document.getElementById("preview-tags");
+  tagRoot.innerHTML = "";
+  for (const tag of sample.tags || []) {
+    const span = document.createElement("span");
+    span.className = "tag";
+    span.textContent = tag.NormalizedName;
+    tagRoot.appendChild(span);
+  }
+
+  const player = document.getElementById("player");
+  player.src = `/api/samples/${sample.ID}/audio`;
+  player.load();
+}
+
+async function main() {
+  const search = document.getElementById("search");
+  search.addEventListener("input", async (event) => {
+    state.query = event.target.value.trim();
+    await refreshSamples();
   });
 
-  renderList("tags", tags, (entry) => `${entry.Tag.NormalizedName} (${entry.SampleCount})`);
+  document.getElementById("clear-filters").addEventListener("click", async () => {
+    state.tag = "";
+    state.query = "";
+    search.value = "";
+    await refreshSamples();
+    renderTags();
+  });
+
+  const [tags, clusters] = await Promise.all([
+    loadJSON("/api/tags"),
+    loadJSON("/api/clusters"),
+  ]);
+  state.tags = tags;
+  state.clusters = clusters;
+
+  renderTags();
+  renderClusters();
+  await refreshSamples();
 }
 
 main().catch((error) => {

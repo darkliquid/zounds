@@ -62,3 +62,22 @@ func impulseTrainBuffer(length int, bpm float64, sampleRate int) []float64 {
 
 	return data
 }
+
+func mixedSineBuffer(length int, sampleRate int, freqs ...float64) []float64 {
+	data := make([]float64, length)
+	if len(freqs) == 0 {
+		return data
+	}
+
+	for _, freq := range freqs {
+		for i := range data {
+			data[i] += math.Sin(2 * math.Pi * freq * float64(i) / float64(sampleRate))
+		}
+	}
+
+	scale := 1 / float64(len(freqs))
+	for i := range data {
+		data[i] *= scale
+	}
+	return data
+}

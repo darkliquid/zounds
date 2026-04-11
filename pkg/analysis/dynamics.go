@@ -11,7 +11,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const dynamicsAnalyzerVersion = "0.1.0"
+const dynamicsAnalyzerVersion = "0.2.0"
 
 type DynamicsAnalyzer struct {
 	registry *zaudio.Registry
@@ -53,11 +53,12 @@ func (a *DynamicsAnalyzer) Analyze(ctx context.Context, sample core.Sample) (cor
 		Version:     a.Version(),
 		CompletedAt: time.Now().UTC(),
 		Metrics: map[string]float64{
-			"dynamic_range_db": stats.DynamicRangeDB,
-			"attack_sharpness": stats.AttackSharpness,
-			"sustain_ratio":    stats.SustainRatio,
-			"transient_rate":   stats.TransientRate,
-			"window_count":     float64(stats.WindowCount),
+			"dynamic_range_db":  stats.DynamicRangeDB,
+			"attack_sharpness":  stats.AttackSharpness,
+			"sustain_ratio":     stats.SustainRatio,
+			"transient_rate":    stats.TransientRate,
+			"temporal_centroid": stats.TemporalCentroid,
+			"window_count":      float64(stats.WindowCount),
 		},
 		Attributes: map[string]string{
 			"channel_layout": channelLayout(decoded.Buffer.Channels),
@@ -66,13 +67,17 @@ func (a *DynamicsAnalyzer) Analyze(ctx context.Context, sample core.Sample) (cor
 }
 
 type DynamicsStats struct {
-	DynamicRangeDB  float64
-	AttackSharpness float64
-	SustainRatio    float64
-	TransientRate   float64
-	WindowCount     int
+	DynamicRangeDB   float64
+	AttackSharpness  float64
+	SustainRatio     float64
+	TransientRate    float64
+	TemporalCentroid float64
+	WindowCount      int
 }
 
+// computeDynamics includes a temporal centroid over the RMS envelope following
+// common temporal descriptor practice summarized by Peeters (2004), "A large
+// set of audio features for sound description."
 func computeDynamics(buffer zaudio.PCMBuffer) DynamicsStats {
 	if len(buffer.Data) == 0 {
 		return DynamicsStats{}
@@ -134,6 +139,8 @@ func computeDynamics(buffer zaudio.PCMBuffer) DynamicsStats {
 		sustainRatio = median / high
 	}
 
+	temporalCentroid := normalizedTemporalCentroid(windows)
+
 	durationSeconds := buffer.Duration().Seconds()
 	transientRate := 0.0
 	if durationSeconds > 0 {
@@ -141,12 +148,37 @@ func computeDynamics(buffer zaudio.PCMBuffer) DynamicsStats {
 	}
 
 	return DynamicsStats{
-		DynamicRangeDB:  dynamicRange,
-		AttackSharpness: maxDelta,
-		SustainRatio:    sustainRatio,
-		TransientRate:   transientRate,
-		WindowCount:     len(windows),
+		DynamicRangeDB:   dynamicRange,
+		AttackSharpness:  maxDelta,
+		SustainRatio:     sustainRatio,
+		TransientRate:    transientRate,
+		TemporalCentroid: temporalCentroid,
+		WindowCount:      len(windows),
 	}
+}
+
+func normalizedTemporalCentroid(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+
+	var (
+		total    float64
+		weighted float64
+		denom    = math.Max(1, float64(len(values)-1))
+	)
+	for i, value := range values {
+		if value <= 0 {
+			continue
+		}
+		position := float64(i) / denom
+		total += value
+		weighted += position * value
+	}
+	if total == 0 {
+		return 0
+	}
+	return weighted / total
 }
 
 func percentile(sorted []float64, p float64) float64 {

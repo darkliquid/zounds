@@ -8,7 +8,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const featureVectorVersion = "0.1.0"
+const featureVectorVersion = "0.2.0"
 
 var defaultFeatureOrder = []string{
 	"sample_rate",
@@ -22,6 +22,14 @@ var defaultFeatureOrder = []string{
 	"zero_crossing_rate",
 	"dominant_frequency_hz",
 	"spectral_flatness",
+	"spectral_bandwidth_hz",
+	"spectral_contrast_0",
+	"spectral_contrast_1",
+	"spectral_contrast_2",
+	"spectral_contrast_3",
+	"spectral_contrast_4",
+	"spectral_contrast_5",
+	"spectral_contrast_6",
 	"peak",
 	"peak_dbfs",
 	"rms",
@@ -33,6 +41,7 @@ var defaultFeatureOrder = []string{
 	"attack_sharpness",
 	"sustain_ratio",
 	"transient_rate",
+	"temporal_centroid",
 	"tempo_bpm",
 	"beat_period_seconds",
 	"onset_strength",

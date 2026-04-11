@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"gonum.org/v1/gonum/dsp/fourier"
@@ -12,7 +13,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const spectralAnalyzerVersion = "0.1.0"
+const spectralAnalyzerVersion = "0.2.0"
 
 type SpectralAnalyzer struct {
 	registry *zaudio.Registry
@@ -60,6 +61,14 @@ func (a *SpectralAnalyzer) Analyze(ctx context.Context, sample core.Sample) (cor
 			"zero_crossing_rate":    stats.ZeroCrossingRate,
 			"dominant_frequency_hz": stats.DominantFrequencyHz,
 			"spectral_flatness":     stats.Flatness,
+			"spectral_bandwidth_hz": stats.BandwidthHz,
+			"spectral_contrast_0":   stats.Contrast[0],
+			"spectral_contrast_1":   stats.Contrast[1],
+			"spectral_contrast_2":   stats.Contrast[2],
+			"spectral_contrast_3":   stats.Contrast[3],
+			"spectral_contrast_4":   stats.Contrast[4],
+			"spectral_contrast_5":   stats.Contrast[5],
+			"spectral_contrast_6":   stats.Contrast[6],
 		},
 		Attributes: map[string]string{
 			"channel_layout": channelLayout(decoded.Buffer.Channels),
@@ -74,8 +83,13 @@ type SpectralStats struct {
 	ZeroCrossingRate    float64
 	DominantFrequencyHz float64
 	Flatness            float64
+	BandwidthHz         float64
+	Contrast            [7]float64
 }
 
+// computeSpectral follows standard MIR feature definitions for spectral
+// bandwidth and uses the sub-band contrast approach described by Jiang et al.
+// (2002), "Music type classification by spectral contrast feature."
 func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 	mono := mixDownMono(buffer)
 	if len(mono) < 2 || buffer.SampleRate <= 0 {
@@ -97,9 +111,10 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 	fft := fourier.NewFFT(windowSize)
 	average := make([]float64, windowSize/2+1)
 	var (
-		frameCount int
-		totalFlux  float64
-		prev       []float64
+		frameCount   int
+		totalFlux    float64
+		prev         []float64
+		contrastSums [7]float64
 	)
 
 	for start := 0; start < len(mono); start += hopSize {
@@ -129,6 +144,11 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 			totalFlux += flux / float64(len(mags))
 		}
 
+		contrast := spectralContrast(mags, buffer.SampleRate, fft, len(contrastSums))
+		for i := range contrastSums {
+			contrastSums[i] += contrast[i]
+		}
+
 		prev = mags
 		frameCount++
 		if end == len(mono) {
@@ -144,13 +164,21 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 		average[i] /= float64(frameCount)
 	}
 
+	centroid := spectralCentroid(average, buffer.SampleRate, fft)
+	var contrast [7]float64
+	for i := range contrast {
+		contrast[i] = contrastSums[i] / float64(frameCount)
+	}
+
 	return SpectralStats{
-		CentroidHz:          spectralCentroid(average, buffer.SampleRate, fft),
+		CentroidHz:          centroid,
 		RolloffHz:           spectralRolloff(average, buffer.SampleRate, fft, 0.85),
 		Flux:                totalFlux / math.Max(1, float64(frameCount-1)),
 		ZeroCrossingRate:    zeroCrossingRate(mono),
 		DominantFrequencyHz: dominantFrequency(average, buffer.SampleRate, fft),
 		Flatness:            spectralFlatness(average),
+		BandwidthHz:         spectralBandwidth(average, buffer.SampleRate, fft, centroid),
+		Contrast:            contrast,
 	}
 }
 
@@ -223,6 +251,23 @@ func spectralRolloff(mags []float64, sampleRate int, fft *fourier.FFT, threshold
 	return 0
 }
 
+func spectralBandwidth(mags []float64, sampleRate int, fft *fourier.FFT, centroid float64) float64 {
+	var (
+		weighted float64
+		total    float64
+	)
+	for i, mag := range mags {
+		freq := fft.Freq(i) * float64(sampleRate)
+		diff := freq - centroid
+		weighted += mag * diff * diff
+		total += mag
+	}
+	if total == 0 {
+		return 0
+	}
+	return math.Sqrt(weighted / total)
+}
+
 func dominantFrequency(mags []float64, sampleRate int, fft *fourier.FFT) float64 {
 	var (
 		index int
@@ -257,6 +302,52 @@ func spectralFlatness(mags []float64) float64 {
 	geo := math.Exp(sumLog / float64(count))
 	arith := sum / float64(count)
 	return geo / arith
+}
+
+func spectralContrast(mags []float64, sampleRate int, fft *fourier.FFT, bandCount int) []float64 {
+	contrast := make([]float64, bandCount)
+	if len(mags) == 0 || bandCount <= 0 {
+		return contrast
+	}
+
+	nyquist := float64(sampleRate) / 2
+	lower := 0.0
+	upper := 200.0
+	epsilon := 1e-12
+
+	for band := 0; band < bandCount; band++ {
+		if band == bandCount-1 || upper >= nyquist {
+			upper = nyquist
+		}
+
+		values := make([]float64, 0, len(mags))
+		for i, mag := range mags {
+			freq := fft.Freq(i) * float64(sampleRate)
+			if freq < lower {
+				continue
+			}
+			if band == bandCount-1 {
+				if freq > upper {
+					continue
+				}
+			} else if freq >= upper {
+				continue
+			}
+			values = append(values, mag)
+		}
+
+		if len(values) > 0 {
+			sort.Float64s(values)
+			low := percentile(values, 0.1)
+			high := percentile(values, 0.9)
+			contrast[band] = 20*math.Log10(high+epsilon) - 20*math.Log10(low+epsilon)
+		}
+
+		lower = upper
+		upper *= 2
+	}
+
+	return contrast
 }
 
 func zeroCrossingRate(samples []float64) float64 {

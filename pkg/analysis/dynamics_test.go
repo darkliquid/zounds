@@ -54,4 +54,7 @@ func TestDynamicsAnalyzerCapturesRangeAndTransients(t *testing.T) {
 	if result.Metrics["transient_rate"] <= 0 {
 		t.Fatalf("expected positive transient rate, got %f", result.Metrics["transient_rate"])
 	}
+	if result.Metrics["temporal_centroid"] <= 0.45 {
+		t.Fatalf("expected temporal centroid later in file, got %f", result.Metrics["temporal_centroid"])
+	}
 }

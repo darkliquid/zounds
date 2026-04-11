@@ -14,8 +14,12 @@ import (
 func TestDynamicsAnalyzerCapturesRangeAndTransients(t *testing.T) {
 	t.Parallel()
 
-	data := append(fillBuffer(2048, 0.0), fillBuffer(2048, 0.9)...)
-	data = append(data, fillBuffer(2048, 0.2)...)
+	data := append(fillBuffer(1024, 0.0), fillBuffer(1024, 0.2)...)
+	data = append(data, fillBuffer(1024, 0.5)...)
+	data = append(data, fillBuffer(1024, 0.9)...)
+	data = append(data, fillBuffer(1024, 0.5)...)
+	data = append(data, fillBuffer(1024, 0.2)...)
+	data = append(data, fillBuffer(1024, 0.05)...)
 
 	path := filepath.Join(t.TempDir(), "dynamic.wav")
 	writeAnalysisWAV(t, path, zaudio.PCMBuffer{
@@ -56,5 +60,11 @@ func TestDynamicsAnalyzerCapturesRangeAndTransients(t *testing.T) {
 	}
 	if result.Metrics["temporal_centroid"] <= 0.45 {
 		t.Fatalf("expected temporal centroid later in file, got %f", result.Metrics["temporal_centroid"])
+	}
+	if result.Metrics["attack_time_ms"] <= 0 {
+		t.Fatalf("expected positive attack time, got %f", result.Metrics["attack_time_ms"])
+	}
+	if result.Metrics["sustain_level_dbfs"] >= 0 {
+		t.Fatalf("expected sustain level below 0 dBFS, got %f", result.Metrics["sustain_level_dbfs"])
 	}
 }

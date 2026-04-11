@@ -2,6 +2,7 @@ package analysis_test
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,6 +34,14 @@ func fillBuffer(length int, value float64) []float64 {
 	data := make([]float64, length)
 	for i := range data {
 		data[i] = value
+	}
+	return data
+}
+
+func sineBuffer(length int, frequency float64, sampleRate int) []float64 {
+	data := make([]float64, length)
+	for i := range data {
+		data[i] = math.Sin(2 * math.Pi * frequency * float64(i) / float64(sampleRate))
 	}
 	return data
 }

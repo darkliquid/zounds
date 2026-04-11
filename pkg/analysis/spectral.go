@@ -1,0 +1,287 @@
+package analysis
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"time"
+
+	"gonum.org/v1/gonum/dsp/fourier"
+
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/core"
+)
+
+const spectralAnalyzerVersion = "0.1.0"
+
+type SpectralAnalyzer struct {
+	registry *zaudio.Registry
+}
+
+func NewSpectralAnalyzer(registry *zaudio.Registry) (*SpectralAnalyzer, error) {
+	var err error
+	registry, err = defaultRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SpectralAnalyzer{registry: registry}, nil
+}
+
+func (a *SpectralAnalyzer) Name() string {
+	return "spectral"
+}
+
+func (a *SpectralAnalyzer) Version() string {
+	return spectralAnalyzerVersion
+}
+
+func (a *SpectralAnalyzer) Analyze(ctx context.Context, sample core.Sample) (core.AnalysisResult, error) {
+	if a == nil || a.registry == nil {
+		return core.AnalysisResult{}, fmt.Errorf("spectral analyzer is not initialized")
+	}
+
+	decoded, err := decodeSample(ctx, a.registry, sample)
+	if err != nil {
+		return core.AnalysisResult{}, fmt.Errorf("analyze spectral features for %q: %w", sample.Path, err)
+	}
+
+	stats := computeSpectral(decoded.Buffer)
+
+	return core.AnalysisResult{
+		SampleID:    sample.ID,
+		Analyzer:    a.Name(),
+		Version:     a.Version(),
+		CompletedAt: time.Now().UTC(),
+		Metrics: map[string]float64{
+			"spectral_centroid_hz":  stats.CentroidHz,
+			"spectral_rolloff_hz":   stats.RolloffHz,
+			"spectral_flux":         stats.Flux,
+			"zero_crossing_rate":    stats.ZeroCrossingRate,
+			"dominant_frequency_hz": stats.DominantFrequencyHz,
+			"spectral_flatness":     stats.Flatness,
+		},
+		Attributes: map[string]string{
+			"channel_layout": channelLayout(decoded.Buffer.Channels),
+		},
+	}, nil
+}
+
+type SpectralStats struct {
+	CentroidHz          float64
+	RolloffHz           float64
+	Flux                float64
+	ZeroCrossingRate    float64
+	DominantFrequencyHz float64
+	Flatness            float64
+}
+
+func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
+	mono := mixDownMono(buffer)
+	if len(mono) < 2 || buffer.SampleRate <= 0 {
+		return SpectralStats{}
+	}
+
+	windowSize := 2048
+	if len(mono) < windowSize {
+		windowSize = nextPowerOfTwo(len(mono))
+		if windowSize < 2 {
+			windowSize = len(mono)
+		}
+	}
+	hopSize := windowSize / 2
+	if hopSize == 0 {
+		hopSize = 1
+	}
+
+	fft := fourier.NewFFT(windowSize)
+	average := make([]float64, windowSize/2+1)
+	var (
+		frameCount int
+		totalFlux  float64
+		prev       []float64
+	)
+
+	for start := 0; start < len(mono); start += hopSize {
+		frame := make([]float64, windowSize)
+		end := start + windowSize
+		if end > len(mono) {
+			end = len(mono)
+		}
+		copy(frame, mono[start:end])
+		applyHannWindow(frame)
+
+		coeff := fft.Coefficients(nil, frame)
+		mags := magnitudeSpectrum(coeff)
+
+		for i, mag := range mags {
+			average[i] += mag
+		}
+
+		if prev != nil {
+			var flux float64
+			for i, mag := range mags {
+				diff := mag - prev[i]
+				if diff > 0 {
+					flux += diff
+				}
+			}
+			totalFlux += flux / float64(len(mags))
+		}
+
+		prev = mags
+		frameCount++
+		if end == len(mono) {
+			break
+		}
+	}
+
+	if frameCount == 0 {
+		return SpectralStats{}
+	}
+
+	for i := range average {
+		average[i] /= float64(frameCount)
+	}
+
+	return SpectralStats{
+		CentroidHz:          spectralCentroid(average, buffer.SampleRate, fft),
+		RolloffHz:           spectralRolloff(average, buffer.SampleRate, fft, 0.85),
+		Flux:                totalFlux / math.Max(1, float64(frameCount-1)),
+		ZeroCrossingRate:    zeroCrossingRate(mono),
+		DominantFrequencyHz: dominantFrequency(average, buffer.SampleRate, fft),
+		Flatness:            spectralFlatness(average),
+	}
+}
+
+func mixDownMono(buffer zaudio.PCMBuffer) []float64 {
+	if buffer.Channels <= 1 {
+		return append([]float64(nil), buffer.Data...)
+	}
+
+	frames := buffer.Frames()
+	mono := make([]float64, frames)
+	for frame := 0; frame < frames; frame++ {
+		var sum float64
+		for ch := 0; ch < buffer.Channels; ch++ {
+			sum += buffer.Data[frame*buffer.Channels+ch]
+		}
+		mono[frame] = sum / float64(buffer.Channels)
+	}
+	return mono
+}
+
+func applyHannWindow(frame []float64) {
+	n := len(frame)
+	if n <= 1 {
+		return
+	}
+	for i := range frame {
+		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/float64(n-1)))
+	}
+}
+
+func magnitudeSpectrum(coeff []complex128) []float64 {
+	limit := len(coeff)/2 + 1
+	mags := make([]float64, limit)
+	for i := 0; i < limit; i++ {
+		mags[i] = cmplxAbs(coeff[i])
+	}
+	return mags
+}
+
+func spectralCentroid(mags []float64, sampleRate int, fft *fourier.FFT) float64 {
+	var weighted, total float64
+	for i, mag := range mags {
+		freq := fft.Freq(i) * float64(sampleRate)
+		weighted += freq * mag
+		total += mag
+	}
+	if total == 0 {
+		return 0
+	}
+	return weighted / total
+}
+
+func spectralRolloff(mags []float64, sampleRate int, fft *fourier.FFT, threshold float64) float64 {
+	var total float64
+	for _, mag := range mags {
+		total += mag
+	}
+	if total == 0 {
+		return 0
+	}
+
+	target := total * threshold
+	var cumulative float64
+	for i, mag := range mags {
+		cumulative += mag
+		if cumulative >= target {
+			return fft.Freq(i) * float64(sampleRate)
+		}
+	}
+	return 0
+}
+
+func dominantFrequency(mags []float64, sampleRate int, fft *fourier.FFT) float64 {
+	var (
+		index int
+		max   float64
+	)
+	for i := 1; i < len(mags); i++ {
+		if mags[i] > max {
+			max = mags[i]
+			index = i
+		}
+	}
+	return fft.Freq(index) * float64(sampleRate)
+}
+
+func spectralFlatness(mags []float64) float64 {
+	var (
+		sumLog float64
+		sum    float64
+		count  int
+	)
+	for _, mag := range mags {
+		if mag <= 0 {
+			continue
+		}
+		sumLog += math.Log(mag)
+		sum += mag
+		count++
+	}
+	if count == 0 || sum == 0 {
+		return 0
+	}
+	geo := math.Exp(sumLog / float64(count))
+	arith := sum / float64(count)
+	return geo / arith
+}
+
+func zeroCrossingRate(samples []float64) float64 {
+	if len(samples) < 2 {
+		return 0
+	}
+	crossings := 0
+	prev := samples[0]
+	for _, current := range samples[1:] {
+		if (prev >= 0 && current < 0) || (prev < 0 && current >= 0) {
+			crossings++
+		}
+		prev = current
+	}
+	return float64(crossings) / float64(len(samples)-1)
+}
+
+func nextPowerOfTwo(n int) int {
+	p := 1
+	for p < n {
+		p <<= 1
+	}
+	return p
+}
+
+func cmplxAbs(v complex128) float64 {
+	return math.Hypot(real(v), imag(v))
+}

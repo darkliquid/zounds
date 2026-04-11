@@ -11,7 +11,7 @@ Phase 1 establishes the project foundation:
 
 Phase 2 has started with shared audio buffer/codec abstractions and pure-Go codecs for WAV, AIFF, FLAC, MP3, and OGG/Vorbis.
 
-Phase 3 has started with reusable metadata, spectral, loudness, and dynamics extraction, including embedded file metadata (for example ID3/Vorbis/FLAC tags), and the tagging layer now includes path-based tag extraction.
+Phase 3 has started with reusable metadata, spectral, beat, loudness, and dynamics extraction, including embedded file metadata (for example ID3/Vorbis/FLAC tags), and the tagging layer now includes path-based tag extraction.
 
 ## Current layout
 

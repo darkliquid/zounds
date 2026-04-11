@@ -45,3 +45,20 @@ func sineBuffer(length int, frequency float64, sampleRate int) []float64 {
 	}
 	return data
 }
+
+func impulseTrainBuffer(length int, bpm float64, sampleRate int) []float64 {
+	data := make([]float64, length)
+	interval := int(math.Round(float64(sampleRate) * 60.0 / bpm))
+	if interval <= 0 {
+		return data
+	}
+
+	for i := 0; i < length; i += interval {
+		data[i] = 1.0
+		if i+1 < length {
+			data[i+1] = 0.5
+		}
+	}
+
+	return data
+}

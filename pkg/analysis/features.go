@@ -1,0 +1,122 @@
+package analysis
+
+import (
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/darkliquid/zounds/pkg/core"
+)
+
+const featureVectorVersion = "0.1.0"
+
+var defaultFeatureOrder = []string{
+	"sample_rate",
+	"channels",
+	"bit_depth",
+	"bitrate",
+	"duration_seconds",
+	"spectral_centroid_hz",
+	"spectral_rolloff_hz",
+	"spectral_flux",
+	"zero_crossing_rate",
+	"dominant_frequency_hz",
+	"spectral_flatness",
+	"peak",
+	"peak_dbfs",
+	"rms",
+	"rms_dbfs",
+	"crest_factor",
+	"integrated_lufs",
+	"mean_abs",
+	"dynamic_range_db",
+	"attack_sharpness",
+	"sustain_ratio",
+	"transient_rate",
+	"tempo_bpm",
+	"beat_period_seconds",
+	"onset_strength",
+	"beat_count_estimate",
+	"frequency_hz",
+	"midi_note",
+	"confidence",
+	"cents_from_note",
+	"mfcc_0",
+	"mfcc_1",
+	"mfcc_2",
+	"mfcc_3",
+	"mfcc_4",
+	"mfcc_5",
+	"mfcc_6",
+	"mfcc_7",
+	"mfcc_8",
+	"mfcc_9",
+	"mfcc_10",
+	"mfcc_11",
+	"mfcc_12",
+}
+
+type FeatureVectorBuilder struct {
+	order []string
+}
+
+func NewFeatureVectorBuilder(order []string) *FeatureVectorBuilder {
+	if len(order) == 0 {
+		order = append([]string(nil), defaultFeatureOrder...)
+	} else {
+		order = append([]string(nil), order...)
+	}
+
+	return &FeatureVectorBuilder{order: order}
+}
+
+func (b *FeatureVectorBuilder) Build(sampleID int64, results ...core.AnalysisResult) (core.FeatureVector, error) {
+	if b == nil || len(b.order) == 0 {
+		return core.FeatureVector{}, fmt.Errorf("feature vector builder is not initialized")
+	}
+
+	metrics := FlattenMetrics(results...)
+	values := make([]float64, len(b.order))
+	for i, key := range b.order {
+		values[i] = metrics[key]
+	}
+
+	return core.FeatureVector{
+		SampleID:   sampleID,
+		Namespace:  "analysis",
+		Version:    featureVectorVersion,
+		Values:     values,
+		Dimensions: len(values),
+		CreatedAt:  time.Now().UTC(),
+	}, nil
+}
+
+func FlattenMetrics(results ...core.AnalysisResult) map[string]float64 {
+	metrics := make(map[string]float64)
+	for _, result := range results {
+		for key, value := range result.Metrics {
+			metrics[key] = value
+		}
+	}
+	return metrics
+}
+
+func FeatureNames() []string {
+	return append([]string(nil), defaultFeatureOrder...)
+}
+
+func SortedMetricNames(results ...core.AnalysisResult) []string {
+	seen := map[string]struct{}{}
+	for _, result := range results {
+		for key := range result.Metrics {
+			seen[key] = struct{}{}
+		}
+	}
+
+	names := make([]string, 0, len(seen))
+	for key := range seen {
+		names = append(names, key)
+	}
+	sort.Strings(names)
+	return names
+}

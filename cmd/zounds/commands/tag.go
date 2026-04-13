@@ -17,15 +17,12 @@ import (
 
 func newTagCommand(cfg *Config) *cobra.Command {
 	var (
-		auto         bool
-		list         bool
-		path         string
-		addTags      []string
-		removeTags   []string
-		clapEndpoint string
-		clapAPIKey   string
-		clapLabels   []string
-		ruleFile     string
+		auto       bool
+		list       bool
+		path       string
+		addTags    []string
+		removeTags []string
+		ruleFile   string
 	)
 
 	cmd := &cobra.Command{
@@ -51,7 +48,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 
 			switch {
 			case auto:
-				return runAutoTagging(ctx, cmd, repo, cfg, path, clapEndpoint, clapAPIKey, clapLabels, ruleFile)
+				return runAutoTagging(ctx, cmd, repo, cfg, path, ruleFile)
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
@@ -70,15 +67,12 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	flags.StringVar(&path, "path", "", "sample path to target for add/remove or auto-tagging one file")
 	flags.StringSliceVar(&addTags, "add", nil, "manually add one or more tags")
 	flags.StringSliceVar(&removeTags, "remove", nil, "manually remove one or more tags")
-	flags.StringVar(&clapEndpoint, "clap-endpoint", "", "optional CLAP classifier endpoint for auto-tagging")
-	flags.StringVar(&clapAPIKey, "clap-api-key", "", "optional API key for the CLAP classifier endpoint")
-	flags.StringSliceVar(&clapLabels, "clap-label", nil, "candidate CLAP labels to classify against (repeatable)")
 	flags.StringVar(&ruleFile, "rule-file", "", "optional JSON rule config for expr-based rule tagging")
 
 	return cmd
 }
 
-func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, clapEndpoint, clapAPIKey string, clapLabels []string, ruleFile string) error {
+func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile string) error {
 	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
 	if err != nil {
 		return err
@@ -119,7 +113,6 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	if err != nil {
 		return err
 	}
-	clapTagger := tags.NewCLAPTagger(clapEndpoint, clapAPIKey, clapLabels)
 
 	applied := 0
 	for _, sample := range samples {
@@ -173,13 +166,6 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		generated = append(generated, pathTags...)
 		generated = append(generated, metadataTags...)
 		generated = append(generated, ruleTags...)
-		if strings.TrimSpace(clapEndpoint) != "" {
-			clapTags, err := clapTagger.Tags(ctx, sample, combined)
-			if err != nil {
-				return err
-			}
-			generated = append(generated, clapTags...)
-		}
 		generated = dedupeGeneratedTags(generated)
 
 		if cfg.DryRun {

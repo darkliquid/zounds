@@ -124,7 +124,7 @@ func (t *LocalCLAPTagger) Tags(ctx context.Context, sample core.Sample, _ core.A
 			continue
 		}
 		out = append(out, core.Tag{
-			Name:           s.Label,
+			Name:           name,
 			NormalizedName: name,
 			Source:         "clap",
 			Confidence:     float64(s.Score),

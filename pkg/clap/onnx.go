@@ -12,17 +12,33 @@ import (
 const DefaultEmbedDim = 512
 
 var (
-	ortOnce sync.Once
-	ortErr  error
+	ortOnce       sync.Once
+	ortErr        error
+	ortConfigMu   sync.Mutex
+	ortLibPath    string
+	ortLibPathSet bool
 )
 
 // ensureORT initialises the ONNX Runtime environment exactly once.
 // libPath is the path to the onnxruntime shared library; an empty string uses
 // the platform default ("onnxruntime.so" on Linux).
 func ensureORT(libPath string) error {
+	ortConfigMu.Lock()
+	if ortLibPathSet {
+		if ortLibPath != libPath {
+			ortConfigMu.Unlock()
+			return fmt.Errorf("onnxruntime already initialised with libPath %q, cannot reinitialise with %q", ortLibPath, libPath)
+		}
+	} else {
+		ortLibPath = libPath
+		ortLibPathSet = true
+	}
+	selectedLibPath := ortLibPath
+	ortConfigMu.Unlock()
+
 	ortOnce.Do(func() {
-		if libPath != "" {
-			ort.SetSharedLibraryPath(libPath)
+		if selectedLibPath != "" {
+			ort.SetSharedLibraryPath(selectedLibPath)
 		}
 		ortErr = ort.InitializeEnvironment()
 	})
@@ -100,12 +116,25 @@ func (e *audioEncoder) encode(features []float32) ([]float32, error) {
 }
 
 func (e *audioEncoder) close() error {
-	if err := e.session.Destroy(); err != nil {
-		return err
+	var firstErr error
+
+	if e.session != nil {
+		if err := e.session.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	_ = e.inTensor.Destroy()
-	_ = e.outTensor.Destroy()
-	return nil
+	if e.inTensor != nil {
+		if err := e.inTensor.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if e.outTensor != nil {
+		if err := e.outTensor.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
 }
 
 // textEncoder wraps an AdvancedSession for the CLAP text encoder.
@@ -178,6 +207,9 @@ func (e *textEncoder) encode(ids, mask []int64) ([]float32, error) {
 	if len(ids) != len(e.idsBuf) {
 		return nil, fmt.Errorf("text encode: got %d ids, want %d", len(ids), len(e.idsBuf))
 	}
+	if len(mask) != len(e.maskBuf) {
+		return nil, fmt.Errorf("text encode: got %d mask values, want %d", len(mask), len(e.maskBuf))
+	}
 	copy(e.idsBuf, ids)
 	copy(e.maskBuf, mask)
 
@@ -191,11 +223,28 @@ func (e *textEncoder) encode(ids, mask []int64) ([]float32, error) {
 }
 
 func (e *textEncoder) close() error {
-	if err := e.session.Destroy(); err != nil {
-		return err
+	var firstErr error
+
+	if e.session != nil {
+		if err := e.session.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	_ = e.idsTensor.Destroy()
-	_ = e.maskTensor.Destroy()
-	_ = e.outTensor.Destroy()
-	return nil
+	if e.idsTensor != nil {
+		if err := e.idsTensor.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if e.maskTensor != nil {
+		if err := e.maskTensor.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if e.outTensor != nil {
+		if err := e.outTensor.Destroy(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
 }

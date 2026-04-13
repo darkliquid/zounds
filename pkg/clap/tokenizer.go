@@ -151,13 +151,15 @@ func NewBPETokenizer(path string, maxLen int) (*BPETokenizer, error) {
 	}
 
 	// Fall back to common special token names in the vocabulary.
-	if t.bosID == 0 && t.eosID == 0 {
+	if t.bosID == 0 {
 		for _, candidate := range []string{"<|startoftext|>", "<s>", "[CLS]"} {
 			if id, ok := raw.Model.Vocab[candidate]; ok {
 				t.bosID = id
 				break
 			}
 		}
+	}
+	if t.eosID == 0 {
 		for _, candidate := range []string{"<|endoftext|>", "</s>", "[SEP]"} {
 			if id, ok := raw.Model.Vocab[candidate]; ok {
 				t.eosID = id

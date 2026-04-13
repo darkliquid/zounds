@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
@@ -58,6 +59,29 @@ func DefaultConfig() Config {
 	}
 }
 
+func applyZeroValueDefaults(dst any, defaults any) {
+	dv := reflect.ValueOf(dst)
+	if dv.Kind() != reflect.Ptr || dv.IsNil() {
+		return
+	}
+
+	dv = dv.Elem()
+	defv := reflect.ValueOf(defaults)
+	if dv.Kind() != reflect.Struct || defv.Kind() != reflect.Struct || dv.Type() != defv.Type() {
+		return
+	}
+
+	for i := 0; i < dv.NumField(); i++ {
+		field := dv.Field(i)
+		if !field.CanSet() {
+			continue
+		}
+		if field.IsZero() {
+			field.Set(defv.Field(i))
+		}
+	}
+}
+
 func (c *Config) applyDefaults() {
 	d := DefaultConfig()
 	if c.EmbedDim <= 0 {
@@ -90,9 +114,7 @@ func (c *Config) applyDefaults() {
 	if c.TextOutputName == "" {
 		c.TextOutputName = d.TextOutputName
 	}
-	if c.FeatureExtractor.SampleRate == 0 {
-		c.FeatureExtractor = d.FeatureExtractor
-	}
+	applyZeroValueDefaults(&c.FeatureExtractor, d.FeatureExtractor)
 }
 
 // LabelScore pairs a text label with its cosine similarity to the audio

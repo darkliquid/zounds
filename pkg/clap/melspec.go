@@ -135,6 +135,7 @@ func (fe *FeatureExtractor) computeLogMelSpectrogram(samples []float64) []float3
 	logMel := make([]float64, cfg.NumMelBins*numFrames)
 	frame := make([]float64, cfg.FFTWindowSize)
 	binCount := cfg.FFTWindowSize/2 + 1
+	coeff := make([]complex128, binCount)
 
 	for f := 0; f < numFrames; f++ {
 		start := f * cfg.HopLength
@@ -150,7 +151,7 @@ func (fe *FeatureExtractor) computeLogMelSpectrogram(samples []float64) []float3
 		}
 
 		// FFT and power spectrum.
-		coeff := fe.fft.Coefficients(nil, frame)
+		coeff = fe.fft.Coefficients(coeff, frame)
 
 		// Mel filterbank + log scaling.
 		for m, filter := range fe.filters {

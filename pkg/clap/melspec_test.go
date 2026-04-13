@@ -95,3 +95,24 @@ func TestMelFilterBankHTK_Shape(t *testing.T) {
 		}
 	}
 }
+
+func TestReorderMelFrameToFrameMel(t *testing.T) {
+	src := []float32{
+		0, 1, 2,
+		10, 11, 12,
+	}
+	dst := make([]float32, len(src))
+
+	reorderMelFrameToFrameMel(dst, src, 2, 3)
+
+	want := []float32{
+		0, 10,
+		1, 11,
+		2, 12,
+	}
+	for i, got := range dst {
+		if got != want[i] {
+			t.Fatalf("dst[%d] = %v, want %v", i, got, want[i])
+		}
+	}
+}

@@ -2,6 +2,7 @@ package clap
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -46,22 +47,24 @@ func ensureORT(libPath string) error {
 }
 
 // audioEncoder wraps an AdvancedSession for the CLAP audio encoder.
-// Input:  input_features [1, 1, numMelBins, numFrames] float32
-// Output: audio_embeds   [1, embedDim]               float32
+// Input:  input_features [1, 1, numFrames, numMelBins] float32
+// Output: audio_embeds   [1, embedDim]                  float32
 type audioEncoder struct {
-	session   *ort.AdvancedSession
-	inputBuf  []float32
-	outputBuf []float32
-	inTensor  *ort.Tensor[float32]
-	outTensor *ort.Tensor[float32]
-	mu        sync.Mutex
+	session    *ort.AdvancedSession
+	inputBuf   []float32
+	outputBuf  []float32
+	inTensor   *ort.Tensor[float32]
+	outTensor  *ort.Tensor[float32]
+	numMelBins int
+	numFrames  int
+	mu         sync.Mutex
 }
 
 func newAudioEncoder(modelPath string, numMelBins, numFrames, embedDim int, inputName, outputName string) (*audioEncoder, error) {
 	inputBuf := make([]float32, numMelBins*numFrames)
 	outputBuf := make([]float32, embedDim)
 
-	inTensor, err := ort.NewTensor(ort.NewShape(1, 1, int64(numMelBins), int64(numFrames)), inputBuf)
+	inTensor, err := ort.NewTensor(ort.NewShape(1, 1, int64(numFrames), int64(numMelBins)), inputBuf)
 	if err != nil {
 		return nil, fmt.Errorf("create audio input tensor: %w", err)
 	}
@@ -87,16 +90,19 @@ func newAudioEncoder(modelPath string, numMelBins, numFrames, embedDim int, inpu
 	}
 
 	return &audioEncoder{
-		session:   session,
-		inputBuf:  inTensor.GetData(),
-		outputBuf: outTensor.GetData(),
-		inTensor:  inTensor,
-		outTensor: outTensor,
+		session:    session,
+		inputBuf:   inTensor.GetData(),
+		outputBuf:  outTensor.GetData(),
+		inTensor:   inTensor,
+		outTensor:  outTensor,
+		numMelBins: numMelBins,
+		numFrames:  numFrames,
 	}, nil
 }
 
 // encode copies features into the input tensor, runs inference, and returns
-// the embedding.  features must have length numMelBins*numFrames.
+// the embedding. features must be laid out as [mel_bin][time_frame] and have
+// length numMelBins*numFrames.
 func (e *audioEncoder) encode(features []float32) ([]float32, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -104,7 +110,7 @@ func (e *audioEncoder) encode(features []float32) ([]float32, error) {
 	if len(features) != len(e.inputBuf) {
 		return nil, fmt.Errorf("audio encode: got %d features, want %d", len(features), len(e.inputBuf))
 	}
-	copy(e.inputBuf, features)
+	reorderMelFrameToFrameMel(e.inputBuf, features, e.numMelBins, e.numFrames)
 
 	if err := e.session.Run(); err != nil {
 		return nil, fmt.Errorf("audio encoder run: %w", err)
@@ -113,6 +119,15 @@ func (e *audioEncoder) encode(features []float32) ([]float32, error) {
 	out := make([]float32, len(e.outputBuf))
 	copy(out, e.outputBuf)
 	return out, nil
+}
+
+func reorderMelFrameToFrameMel(dst, src []float32, numMelBins, numFrames int) {
+	for mel := range numMelBins {
+		srcBase := mel * numFrames
+		for frame := range numFrames {
+			dst[frame*numMelBins+mel] = src[srcBase+frame]
+		}
+	}
 }
 
 func (e *audioEncoder) close() error {
@@ -141,14 +156,19 @@ func (e *audioEncoder) close() error {
 // Inputs:  input_ids [1, maxTokens] int64, attention_mask [1, maxTokens] int64
 // Output:  text_embeds [1, embedDim] float32
 type textEncoder struct {
-	session   *ort.AdvancedSession
-	idsBuf    []int64
-	maskBuf   []int64
-	outputBuf []float32
-	idsTensor  *ort.Tensor[int64]
-	maskTensor *ort.Tensor[int64]
-	outTensor  *ort.Tensor[float32]
-	mu         sync.Mutex
+	session           *ort.AdvancedSession
+	idsBuf            []int64
+	maskBuf           []int64
+	outputBuf         []float32
+	idsTensor         *ort.Tensor[int64]
+	maskTensor        *ort.Tensor[int64]
+	outTensor         *ort.Tensor[float32]
+	modelPath         string
+	inputIDsName      string
+	attentionMaskName string
+	outputName        string
+	useAttentionMask  bool
+	mu                sync.Mutex
 }
 
 func newTextEncoder(modelPath string, maxTokens, embedDim int, inputIDsName, attentionMaskName, outputName string) (*textEncoder, error) {
@@ -188,13 +208,18 @@ func newTextEncoder(modelPath string, maxTokens, embedDim int, inputIDsName, att
 	}
 
 	return &textEncoder{
-		session:    session,
-		idsBuf:     idsTensor.GetData(),
-		maskBuf:    maskTensor.GetData(),
-		outputBuf:  outTensor.GetData(),
-		idsTensor:  idsTensor,
-		maskTensor: maskTensor,
-		outTensor:  outTensor,
+		session:           session,
+		idsBuf:            idsTensor.GetData(),
+		maskBuf:           maskTensor.GetData(),
+		outputBuf:         outTensor.GetData(),
+		idsTensor:         idsTensor,
+		maskTensor:        maskTensor,
+		outTensor:         outTensor,
+		modelPath:         modelPath,
+		inputIDsName:      inputIDsName,
+		attentionMaskName: attentionMaskName,
+		outputName:        outputName,
+		useAttentionMask:  true,
 	}, nil
 }
 
@@ -214,12 +239,49 @@ func (e *textEncoder) encode(ids, mask []int64) ([]float32, error) {
 	copy(e.maskBuf, mask)
 
 	if err := e.session.Run(); err != nil {
-		return nil, fmt.Errorf("text encoder run: %w", err)
+		if e.useAttentionMask && isInvalidAttentionMaskInputError(err) {
+			if rebuildErr := e.rebuildSessionWithoutAttentionMask(); rebuildErr != nil {
+				return nil, fmt.Errorf("text encoder reconfigure without attention mask: %w", rebuildErr)
+			}
+			if err = e.session.Run(); err != nil {
+				return nil, fmt.Errorf("text encoder run: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("text encoder run: %w", err)
+		}
 	}
 
 	out := make([]float32, len(e.outputBuf))
 	copy(out, e.outputBuf)
 	return out, nil
+}
+
+func (e *textEncoder) rebuildSessionWithoutAttentionMask() error {
+	if e.session != nil {
+		if err := e.session.Destroy(); err != nil {
+			return err
+		}
+	}
+
+	session, err := ort.NewAdvancedSession(
+		e.modelPath,
+		[]string{e.inputIDsName},
+		[]string{e.outputName},
+		[]ort.Value{e.idsTensor},
+		[]ort.Value{e.outTensor},
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	e.session = session
+	e.useAttentionMask = false
+	return nil
+}
+
+func isInvalidAttentionMaskInputError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Invalid input name: attention_mask")
 }
 
 func (e *textEncoder) close() error {

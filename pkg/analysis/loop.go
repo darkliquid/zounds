@@ -108,7 +108,7 @@ func classifyLoop(confidence float64) string {
 	case confidence >= 0.65:
 		return "loop"
 	case confidence < 0.35:
-		return "one-shot"
+		return "one shot"
 	default:
 		return "ambiguous"
 	}

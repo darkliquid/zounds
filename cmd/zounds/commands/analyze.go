@@ -123,6 +123,7 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 		func() (core.Analyzer, error) { return analysis.NewFormantAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewSpliceAnalyzer(nil) },
 		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(nil) },
+		func() (core.Analyzer, error) { return analysis.NewLoopAnalyzer(nil) },
 	}
 
 	for _, create := range factory {

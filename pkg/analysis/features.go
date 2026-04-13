@@ -8,7 +8,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const featureVectorVersion = "0.7.0"
+const featureVectorVersion = "0.8.0"
 
 var defaultFeatureOrder = []string{
 	"sample_rate",
@@ -101,6 +101,11 @@ var defaultFeatureOrder = []string{
 	"mfcc_10",
 	"mfcc_11",
 	"mfcc_12",
+	"loop_boundary_similarity",
+	"loop_tail_rms_ratio",
+	"loop_periodicity_score",
+	"loop_phase_alignment",
+	"loop_confidence",
 }
 
 type FeatureVectorBuilder struct {

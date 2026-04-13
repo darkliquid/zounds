@@ -198,6 +198,16 @@ func defaultRuleDefinitions() []RuleDefinition {
 			Confidence: 0.75,
 		},
 		{
+			Tag:        "loop",
+			Expr:       `Metrics["loop_confidence"] >= 0.65`,
+			Confidence: 0.75,
+		},
+		{
+			Tag:        "oneshot",
+			Expr:       `"loop_confidence" in Metrics && Metrics["loop_confidence"] < 0.35`,
+			Confidence: 0.75,
+		},
+		{
 			Tag:        "hoover",
 			Expr:       `Metrics["frequency_hz"] >= 80 && Metrics["frequency_hz"] <= 400 && Metrics["sustain_ratio"] > 0.45 && Metrics["spectral_flux"] > 0.03 && Metrics["spectral_flux"] < 0.2 && Metrics["spectral_flatness"] > 0.05 && Metrics["spectral_flatness"] < 0.4 && Metrics["confidence"] > 0.4`,
 			Confidence: 0.58,

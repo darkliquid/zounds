@@ -203,7 +203,7 @@ func defaultRuleDefinitions() []RuleDefinition {
 			Confidence: 0.75,
 		},
 		{
-			Tag:        "one shot",
+			Tag:        "oneshot",
 			Expr:       `"loop_confidence" in Metrics && Metrics["loop_confidence"] < 0.35`,
 			Confidence: 0.75,
 		},

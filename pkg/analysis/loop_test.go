@@ -48,16 +48,16 @@ func TestComputeLoopStatsOnOneShotSignal(t *testing.T) {
 	stats := computeLoopStats(buffer)
 
 	if stats.TailRMSRatio > 0.1 {
-		t.Errorf("tail_rms_ratio: want ≤ 0.1 for one-shot, got %f", stats.TailRMSRatio)
+		t.Errorf("tail_rms_ratio: want ≤ 0.1 for oneshot, got %f", stats.TailRMSRatio)
 	}
 	if stats.BoundarySimilarity > 0.2 {
-		t.Errorf("boundary_similarity: want ≤ 0.2 for one-shot, got %f", stats.BoundarySimilarity)
+		t.Errorf("boundary_similarity: want ≤ 0.2 for oneshot, got %f", stats.BoundarySimilarity)
 	}
 	if stats.Confidence >= 0.35 {
-		t.Errorf("confidence: want < 0.35 for one-shot, got %f", stats.Confidence)
+		t.Errorf("confidence: want < 0.35 for oneshot, got %f", stats.Confidence)
 	}
-	if got := classifyLoop(stats.Confidence); got != "one-shot" {
-		t.Errorf("loop_class: want %q, got %q (confidence %f)", "one-shot", got, stats.Confidence)
+	if got := classifyLoop(stats.Confidence); got != "oneshot" {
+		t.Errorf("loop_class: want %q, got %q (confidence %f)", "oneshot", got, stats.Confidence)
 	}
 }
 
@@ -256,8 +256,8 @@ func TestClassifyLoop(t *testing.T) {
 		{0.64, "ambiguous"}, // just below the 0.65 loop threshold
 		{0.5, "ambiguous"},
 		{0.35, "ambiguous"},
-		{0.349, "one-shot"},
-		{0.0, "one-shot"},
+		{0.349, "oneshot"},
+		{0.0, "oneshot"},
 	}
 
 	for _, tc := range cases {

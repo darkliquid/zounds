@@ -15,7 +15,7 @@ import (
 const loopAnalyzerVersion = "0.1.0"
 
 // LoopAnalyzer detects whether a sample is intended for seamless looping or is
-// a one-shot event. It combines four complementary signals: spectral boundary
+// a oneshot event. It combines four complementary signals: spectral boundary
 // similarity, tail energy sustain, RMS-envelope periodicity, and dominant-
 // frequency phase alignment at the loop point.
 type LoopAnalyzer struct {
@@ -108,7 +108,7 @@ func classifyLoop(confidence float64) string {
 	case confidence >= 0.65:
 		return "loop"
 	case confidence < 0.35:
-		return "one shot"
+		return "oneshot"
 	default:
 		return "ambiguous"
 	}
@@ -140,7 +140,7 @@ func computeBoundarySimilarity(mono []float64, sampleRate int) float64 {
 }
 
 // computeTailRMSRatio returns tail_rms / overall_rms where the tail is the
-// last 10% of the sample. Loops maintain energy at the tail; one-shots decay
+// last 10% of the sample. Loops maintain energy at the tail; oneshots decay
 // to near-silence.
 func computeTailRMSRatio(mono []float64) float64 {
 	if len(mono) == 0 {

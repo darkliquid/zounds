@@ -1,61 +1,44 @@
-package tags_test
+package tags
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-
-	"github.com/darkliquid/zounds/pkg/core"
-	"github.com/darkliquid/zounds/pkg/tags"
 )
 
-func TestCLAPTaggerParsesClassifierResponse(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/classify" {
-			t.Fatalf("unexpected path %q", r.URL.Path)
-		}
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if payload["filename"] != "impact.wav" {
-			t.Fatalf("unexpected filename payload: %#v", payload)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"tags": []string{"Cyberpunk", "dark", "cyberpunk"},
-		})
-	}))
-	defer server.Close()
-
-	tagger := tags.NewCLAPTagger(server.URL, "secret", []string{"cyberpunk", "dark"})
-	tagger.HTTPClient = server.Client()
-
-	got, err := tagger.Tags(context.Background(), core.Sample{
-		Path:     "/tmp/impact.wav",
-		FileName: "impact.wav",
-	}, core.AnalysisResult{
-		Metrics: map[string]float64{"spectral_flatness": 0.3},
-	})
-	if err != nil {
-		t.Fatalf("tagger.Tags returned error: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 tags, got %d", len(got))
-	}
-	if got[0].NormalizedName != "cyberpunk" || got[1].NormalizedName != "dark" {
-		t.Fatalf("unexpected tags %#v", got)
+func TestLocalCLAPTagger_Name(t *testing.T) {
+	tagger := &LocalCLAPTagger{}
+	if got := tagger.Name(); got != "clap" {
+		t.Errorf("Name() = %q, want %q", got, "clap")
 	}
 }
 
-func TestCLAPTaggerRequiresEndpoint(t *testing.T) {
-	t.Parallel()
+func TestLocalCLAPTagger_Version(t *testing.T) {
+	tagger := &LocalCLAPTagger{}
+	if got := tagger.Version(); got != localCLAPTaggerVersion {
+		t.Errorf("Version() = %q, want %q", got, localCLAPTaggerVersion)
+	}
+}
 
-	tagger := tags.NewCLAPTagger("", "", nil)
-	if _, err := tagger.Tags(context.Background(), core.Sample{}, core.AnalysisResult{}); err == nil {
-		t.Fatal("expected endpoint validation error")
+func TestNewLocalCLAPTagger_MissingModelDir(t *testing.T) {
+	_, err := NewLocalCLAPTagger("/nonexistent/clap_model", "", nil, 0, 0)
+	if err == nil {
+		t.Error("expected an error when model directory does not exist")
+	}
+}
+
+func TestNewLocalCLAPTagger_DefaultLabels(t *testing.T) {
+	// Verify the default label list is non-empty and contains expected entries.
+	labels := defaultCLAPLabels
+	if len(labels) == 0 {
+		t.Error("defaultCLAPLabels should not be empty")
+	}
+	found := false
+	for _, l := range labels {
+		if l == "ambient" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("defaultCLAPLabels should contain 'ambient'")
 	}
 }

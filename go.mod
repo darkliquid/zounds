@@ -14,6 +14,7 @@ require (
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/mewkiz/flac v1.0.13
 	github.com/spf13/cobra v1.10.2
+	github.com/yalue/onnxruntime_go v1.27.0
 	gonum.org/v1/gonum v0.17.0
 	modernc.org/sqlite v1.40.1
 )

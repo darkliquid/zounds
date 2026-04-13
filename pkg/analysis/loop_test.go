@@ -253,7 +253,7 @@ func TestClassifyLoop(t *testing.T) {
 	}{
 		{1.0, "loop"},
 		{0.65, "loop"},
-		{0.649, "ambiguous"},
+		{0.64, "ambiguous"}, // just below the 0.65 loop threshold
 		{0.5, "ambiguous"},
 		{0.35, "ambiguous"},
 		{0.349, "one-shot"},

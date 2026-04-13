@@ -205,6 +205,14 @@ func computePeriodicityScore(mono []float64, sampleRate int, beatPeriodSeconds f
 		}
 	}
 
+	// Also sweep small absolute lags (1 to steps) so very-short repeating
+	// patterns are not missed by the proportional scan above.
+	for lag := 1; lag <= steps && lag < len(envelope); lag++ {
+		if s := normalizedAutocorrelation(envelope, lag); s > maxScore {
+			maxScore = s
+		}
+	}
+
 	return clampUnit(maxScore)
 }
 
@@ -258,9 +266,9 @@ func computePhaseAlignment(mono []float64, sampleRate int) float64 {
 	tailPhase := math.Atan2(imag(tailCoeffs[dominantBin]), real(tailCoeffs[dominantBin]))
 
 	// Wrap the phase difference into [0, π].
-	diff := math.Abs(headPhase - tailPhase)
-	for diff > math.Pi {
-		diff = math.Abs(diff - 2*math.Pi)
+	diff := math.Mod(math.Abs(headPhase-tailPhase), 2*math.Pi)
+	if diff > math.Pi {
+		diff = 2*math.Pi - diff
 	}
 
 	return 1 - diff/math.Pi

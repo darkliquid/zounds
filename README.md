@@ -41,7 +41,7 @@ Examples:
 ```bash
 zounds scan ~/Samples
 zounds analyze --all
-zounds tag --auto --rule-file ./rules.json --clap-endpoint http://localhost:8000
+zounds tag --auto --rule-file ./rules.json --clap-model-dir ./models/clap
 zounds cluster --method kmeans --k 12 --projection tsne
 zounds dedup --perceptual --threshold 8
 zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dry-run
@@ -49,6 +49,8 @@ zounds serve --port 8080
 ```
 
 By default, the CLI stores its SQLite database at `$XDG_DATA_HOME/zounds/zounds.db`, falling back to `~/.local/share/zounds/zounds.db` when `XDG_DATA_HOME` is unset. Use `--db` to override it.
+
+For local CLAP tagging, download `audio_model.onnx`, `text_model.onnx`, and `tokenizer.json` from [Xenova/clap-htsat-unfused](https://huggingface.co/Xenova/clap-htsat-unfused), place them in a directory such as `./models/clap`, and pass that directory with `--clap-model-dir`. You also need the ONNX Runtime shared library available on your system, or provide its path with `--clap-lib`.
 
 ## Library layout
 

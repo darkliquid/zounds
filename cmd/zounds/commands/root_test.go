@@ -2,6 +2,7 @@ package commands_test
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,5 +55,15 @@ func TestRootCommandIncludesPlannedSubcommands(t *testing.T) {
 		if _, ok := seen[name]; !ok {
 			t.Fatalf("missing subcommand %q", name)
 		}
+	}
+}
+
+func TestDefaultConfigUsesXDGDataDir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/tmp/zounds-data")
+
+	cfg := commands.DefaultConfig()
+	want := filepath.Join("/tmp/zounds-data", "zounds", "zounds.db")
+	if cfg.DatabasePath != want {
+		t.Fatalf("expected database path %q, got %q", want, cfg.DatabasePath)
 	}
 }

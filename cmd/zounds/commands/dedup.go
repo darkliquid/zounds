@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 			}
 
 			ctx := cmd.Context()
+			logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
 			repo, closer, err := openRepository(ctx, cfg)
 			if err != nil {
 				return err
@@ -48,14 +50,14 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 			keepStrategy := dedup.KeepStrategy(strategy)
 			var actions []dedup.CullAction
 			if exact {
-				finder := dedup.NewExactFinder(cfg.Concurrency)
+				finder := dedup.NewExactFinder(cfg.Concurrency, logger)
 				groups, err := finder.Find(ctx, samples)
 				if err != nil {
 					return err
 				}
 				actions = dedup.PlanCull(groups, keepStrategy)
 			} else {
-				hashes, err := buildPerceptualHashes(ctx, samples)
+				hashes, err := buildPerceptualHashes(ctx, samples, logger)
 				if err != nil {
 					return err
 				}
@@ -75,7 +77,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 				return err
 			}
 			if deleteMode && !cfg.DryRun {
-				return applyCullActions(ctx, repo, actions)
+				return applyCullActions(ctx, repo, actions, logger)
 			}
 			return nil
 		},
@@ -91,7 +93,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func buildPerceptualHashes(ctx context.Context, samples []core.Sample) ([]dedup.PerceptualHash, error) {
+func buildPerceptualHashes(ctx context.Context, samples []core.Sample, logger *log.Logger) ([]dedup.PerceptualHash, error) {
 	analyzer, err := analysis.NewPerceptualHashAnalyzer(nil)
 	if err != nil {
 		return nil, err
@@ -99,6 +101,7 @@ func buildPerceptualHashes(ctx context.Context, samples []core.Sample) ([]dedup.
 
 	hashes := make([]dedup.PerceptualHash, 0, len(samples))
 	for _, sample := range samples {
+		verbosef(logger, "building perceptual hash for %s", sample.Path)
 		result, err := analyzer.Analyze(ctx, sample)
 		if err != nil {
 			return nil, err
@@ -126,9 +129,10 @@ func printCullActions(cmd *cobra.Command, actions []dedup.CullAction) error {
 	return nil
 }
 
-func applyCullActions(ctx context.Context, repo *db.Repository, actions []dedup.CullAction) error {
+func applyCullActions(ctx context.Context, repo *db.Repository, actions []dedup.CullAction, logger *log.Logger) error {
 	for _, action := range actions {
 		for _, sample := range action.Remove {
+			verbosef(logger, "removing duplicate file %s", sample.Path)
 			if err := os.Remove(sample.Path); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("remove duplicate file %q: %w", sample.Path, err)
 			}

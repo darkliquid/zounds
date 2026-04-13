@@ -1,6 +1,10 @@
 package commands
 
-import "runtime"
+import (
+	"runtime"
+
+	"github.com/darkliquid/zounds/pkg/db"
+)
 
 type Config struct {
 	DatabasePath string
@@ -11,7 +15,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		DatabasePath: "zounds.db",
+		DatabasePath: db.DefaultPath(),
 		Concurrency:  runtime.NumCPU(),
 	}
 }

@@ -1,9 +1,12 @@
 package scanner_test
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/darkliquid/zounds/pkg/core"
@@ -60,6 +63,36 @@ func TestSupportedExtensionsSorted(t *testing.T) {
 	}
 }
 
+func TestScanLogsRootsAndFilesWhenLoggerConfigured(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "kicks", "deep.wav"))
+	mustWriteFile(t, filepath.Join(root, "notes.txt"))
+
+	var out bytes.Buffer
+	s := scanner.New(scanner.Options{
+		Workers: 1,
+		Logger:  logBuffer(&out),
+	})
+
+	if _, err := s.Scan(context.Background(), root); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	output := out.String()
+	for _, want := range []string{
+		"starting scan with 1 root(s) and 1 worker(s)",
+		"walking root " + root,
+		"scanning file " + filepath.Join(root, "kicks", "deep.wav"),
+		"scan complete: discovered 1 audio file(s)",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in log output %q", want, output)
+		}
+	}
+}
+
 func mustWriteFile(t *testing.T, path string) {
 	t.Helper()
 
@@ -70,4 +103,8 @@ func mustWriteFile(t *testing.T, path string) {
 	if err := os.WriteFile(path, []byte("audio"), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func logBuffer(out *bytes.Buffer) *log.Logger {
+	return log.New(out, "", 0)
 }

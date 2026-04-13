@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -55,9 +57,9 @@ func newTagCommand(cfg *Config) *cobra.Command {
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
-				return runManualTagUpdate(ctx, cmd, repo, cfg, path, addTags, true)
+				return runManualTagUpdate(ctx, cmd, repo, cfg, path, addTags, true, newVerboseLogger(cfg, cmd.ErrOrStderr()))
 			case len(removeTags) > 0:
-				return runManualTagUpdate(ctx, cmd, repo, cfg, path, removeTags, false)
+				return runManualTagUpdate(ctx, cmd, repo, cfg, path, removeTags, false, newVerboseLogger(cfg, cmd.ErrOrStderr()))
 			default:
 				return fmt.Errorf("no tag action selected")
 			}
@@ -79,6 +81,8 @@ func newTagCommand(cfg *Config) *cobra.Command {
 }
 
 func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string) error {
+	logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
+
 	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
 	if err != nil {
 		return err
@@ -131,6 +135,7 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 
 	applied := 0
 	for _, sample := range samples {
+		verbosef(logger, "tagging sample %s", sample.Path)
 		results := make([]core.AnalysisResult, 0, 6)
 		result, err := analyzer.Analyze(ctx, sample)
 		if err != nil {
@@ -189,13 +194,16 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 			generated = append(generated, clapTags...)
 		}
 		generated = dedupeGeneratedTags(generated)
+		verbosef(logger, "generated %d tags for %s: %s", len(generated), sample.Path, strings.Join(tagNames(generated), ", "))
 
 		if cfg.DryRun {
 			applied += len(generated)
+			verbosef(logger, "skipping tag persistence for %s (dry run)", sample.Path)
 			continue
 		}
 
 		for _, tag := range generated {
+			verbosef(logger, "attaching tag %s to %s", normalizedTagName(tag), sample.Path)
 			tagID, err := repo.EnsureTag(ctx, tag)
 			if err != nil {
 				return err
@@ -249,6 +257,25 @@ func dedupeGeneratedTags(tags []core.Tag) []core.Tag {
 	return out
 }
 
+func tagNames(tags []core.Tag) []string {
+	names := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		names = append(names, normalizedTagName(tag))
+	}
+	if len(names) == 0 {
+		return []string{"<none>"}
+	}
+	slices.Sort(names)
+	return names
+}
+
+func normalizedTagName(tag core.Tag) string {
+	if tag.NormalizedName != "" {
+		return tag.NormalizedName
+	}
+	return core.NormalizeTagName(tag.Name)
+}
+
 func runListTags(ctx context.Context, cmd *cobra.Command, repo *db.Repository) error {
 	usages, err := repo.ListTagUsage(ctx)
 	if err != nil {
@@ -264,7 +291,7 @@ func runListTags(ctx context.Context, cmd *cobra.Command, repo *db.Repository) e
 	return nil
 }
 
-func runManualTagUpdate(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, samplePath string, values []string, attach bool) error {
+func runManualTagUpdate(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, samplePath string, values []string, attach bool, logger *log.Logger) error {
 	if strings.TrimSpace(samplePath) == "" {
 		return fmt.Errorf("--path is required for manual tag changes")
 	}
@@ -282,6 +309,11 @@ func runManualTagUpdate(ctx context.Context, cmd *cobra.Command, repo *db.Reposi
 		normalized := core.NormalizeTagName(raw)
 		if normalized == "" {
 			continue
+		}
+		if attach {
+			verbosef(logger, "adding tag %s to %s", normalized, sample.Path)
+		} else {
+			verbosef(logger, "removing tag %s from %s", normalized, sample.Path)
 		}
 
 		if cfg.DryRun {

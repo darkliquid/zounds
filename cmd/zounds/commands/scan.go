@@ -18,11 +18,13 @@ func newScanCommand(cfg *Config) *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
 
 			s := scanner.New(scanner.Options{
 				Workers:       cfg.Concurrency,
 				IncludeHidden: includeHidden,
 				FollowSymlink: followSymlinks,
+				Logger:        logger,
 			})
 
 			samples, err := s.Scan(ctx, args...)
@@ -35,7 +37,7 @@ func newScanCommand(cfg *Config) *cobra.Command {
 				return err
 			}
 
-			repo, closer, err := openRepository(ctx, cfg)
+			repo, closer, err := openRepository(ctx, cfg, logger)
 			if err != nil {
 				return err
 			}

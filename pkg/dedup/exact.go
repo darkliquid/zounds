@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"runtime"
 	"sort"
@@ -24,6 +25,7 @@ const (
 
 type ExactFinder struct {
 	Workers int
+	Logger  *log.Logger
 }
 
 type FileHash struct {
@@ -43,11 +45,15 @@ type CullAction struct {
 	Remove []core.Sample
 }
 
-func NewExactFinder(workers int) ExactFinder {
+func NewExactFinder(workers int, logger ...*log.Logger) ExactFinder {
 	if workers <= 0 {
 		workers = runtime.NumCPU()
 	}
-	return ExactFinder{Workers: workers}
+	var configuredLogger *log.Logger
+	if len(logger) > 0 {
+		configuredLogger = logger[0]
+	}
+	return ExactFinder{Workers: workers, Logger: configuredLogger}
 }
 
 func (f ExactFinder) Find(ctx context.Context, samples []core.Sample) ([]DuplicateGroup, error) {
@@ -70,6 +76,9 @@ func (f ExactFinder) Find(ctx context.Context, samples []core.Sample) ([]Duplica
 		go func() {
 			defer wg.Done()
 			for item := range jobs {
+				if f.Logger != nil {
+					f.Logger.Printf("hashing file %s", item.sample.Path)
+				}
 				hash, err := hashFile(ctx, item.sample.Path)
 				if err != nil {
 					select {

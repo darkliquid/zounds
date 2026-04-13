@@ -62,6 +62,41 @@ func TestTagCommandAutoAppliesPathTags(t *testing.T) {
 	}
 }
 
+func TestTagCommandVerboseShowsPerSampleProgress(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "tags-verbose.db")
+	samplePath := filepath.Join(root, "Drums", "Dark Hits", "impact.wav")
+	writeWAVFixture(t, samplePath)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	tagCmd := commands.NewRootCommand()
+	var out bytes.Buffer
+	tagCmd.SetOut(&out)
+	tagCmd.SetErr(&out)
+	tagCmd.SetArgs([]string{"--verbose", "--db", dbPath, "tag", "--auto"})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute auto tag: %v", err)
+	}
+
+	output := out.String()
+	for _, want := range []string{
+		"verbose: tagging sample " + samplePath,
+		"verbose: generated ",
+		"processed 1 samples and applied ",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in output %q", want, output)
+		}
+	}
+}
+
 func TestTagCommandAutoAppliesRuleTags(t *testing.T) {
 	t.Parallel()
 

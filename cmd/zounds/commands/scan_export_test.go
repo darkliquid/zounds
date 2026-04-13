@@ -36,6 +36,36 @@ func TestScanCommandIndexesSamples(t *testing.T) {
 	}
 }
 
+func TestScanCommandVerboseShowsScanAndDatabaseProgress(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "scan.db")
+	mustWriteFile(t, filepath.Join(root, "kicks", "kick.wav"))
+
+	cmd := commands.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--verbose", "--db", dbPath, "scan", root})
+
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan command: %v", err)
+	}
+
+	output := out.String()
+	for _, want := range []string{
+		"verbose: scanning file " + filepath.Join(root, "kicks", "kick.wav"),
+		"verbose: setting up database at " + dbPath,
+		"verbose: applying migration migrations/0001_initial.sql",
+		"indexed 1 audio files into " + dbPath,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in output %q", want, output)
+		}
+	}
+}
+
 func TestExportCommandOutputsJSON(t *testing.T) {
 	t.Parallel()
 

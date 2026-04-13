@@ -48,6 +48,8 @@ zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dr
 zounds serve --port 8080
 ```
 
+By default, the CLI stores its SQLite database at `$XDG_DATA_HOME/zounds/zounds.db`, falling back to `~/.local/share/zounds/zounds.db` when `XDG_DATA_HOME` is unset. Use `--db` to override it.
+
 ## Library layout
 
 ```text

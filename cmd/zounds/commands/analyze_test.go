@@ -58,6 +58,41 @@ func TestAnalyzeCommandPersistsFeatureVector(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCommandVerboseShowsPerSampleProgress(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "analyze-verbose.db")
+	samplePath := filepath.Join(root, "tones", "a440.wav")
+	writeWAVFixture(t, samplePath)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	analyze := commands.NewRootCommand()
+	var out bytes.Buffer
+	analyze.SetOut(&out)
+	analyze.SetErr(&out)
+	analyze.SetArgs([]string{"--verbose", "--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute analyze: %v", err)
+	}
+
+	output := out.String()
+	for _, want := range []string{
+		"verbose: analyzing sample " + samplePath,
+		"verbose: persisting feature vector for " + samplePath,
+		"analyzed 1 samples",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in output %q", want, output)
+		}
+	}
+}
+
 func TestInfoCommandOutputsAnalysisJSON(t *testing.T) {
 	t.Parallel()
 

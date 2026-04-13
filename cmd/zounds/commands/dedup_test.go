@@ -42,6 +42,42 @@ func TestDedupCommandReportsExactDuplicates(t *testing.T) {
 	}
 }
 
+func TestDedupCommandVerboseShowsPerFileProgress(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "dedup-verbose.db")
+	one := filepath.Join(root, "one.wav")
+	two := filepath.Join(root, "two.wav")
+	writeWAVFixture(t, one)
+	writeWAVFixture(t, two)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	cmd := commands.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--verbose", "--db", dbPath, "--dry-run", "dedup", "--exact"})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute dedup exact: %v", err)
+	}
+
+	output := out.String()
+	for _, want := range []string{
+		"verbose: hashing file " + one,
+		"verbose: hashing file " + two,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in output %q", want, output)
+		}
+	}
+}
+
 func TestDedupCommandDeletesExactDuplicateFiles(t *testing.T) {
 	t.Parallel()
 

@@ -1,9 +1,13 @@
 package db_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +41,70 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("table %s missing: %v", table, err)
 		}
+	}
+}
+
+func TestDefaultPathUsesXDGDataHome(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/tmp/zounds-data")
+
+	if got := db.DefaultPath(); got != filepath.Join("/tmp/zounds-data", "zounds", "zounds.db") {
+		t.Fatalf("unexpected default path: %s", got)
+	}
+}
+
+func TestDefaultPathFallsBackToLocalShare(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("HOME", "/tmp/zounds-home")
+
+	if got := db.DefaultPath(); got != filepath.Join("/tmp/zounds-home", ".local", "share", "zounds", "zounds.db") {
+		t.Fatalf("unexpected fallback path: %s", got)
+	}
+}
+
+func TestOpenLogsSetupStepsWhenLoggerConfigured(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "nested", "zounds.db")
+	var out bytes.Buffer
+
+	database, err := db.Open(ctx, db.Options{
+		Path:   path,
+		Logger: log.New(&out, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	output := out.String()
+	for _, want := range []string{
+		"setting up database at " + path,
+		"ensuring database directory " + filepath.Dir(path),
+		"opening sqlite connection",
+		"pinging sqlite database",
+		"applying migration migrations/0001_initial.sql",
+		"database ready",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in log output %q", want, output)
+		}
+	}
+}
+
+func TestOpenUsesDefaultPathWhenUnset(t *testing.T) {
+	ctx := context.Background()
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	database, err := db.Open(ctx, db.Options{})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	if _, err := os.Stat(filepath.Join(dataHome, "zounds", "zounds.db")); err != nil {
+		t.Fatalf("expected default database file to exist: %v", err)
 	}
 }
 

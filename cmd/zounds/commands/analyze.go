@@ -41,9 +41,11 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 				return err
 			}
 
+			logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
 			builder := analysis.NewFeatureVectorBuilder(nil)
 			processed := 0
 			for _, sample := range samples {
+				verbosef(logger, "analyzing sample %s", sample.Path)
 				results, vector, err := analyzeSample(ctx, sample, builder)
 				if err != nil {
 					return err
@@ -51,9 +53,12 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 				_ = results
 
 				if !cfg.DryRun {
+					verbosef(logger, "persisting feature vector for %s", sample.Path)
 					if _, err := repo.ReplaceFeatureVector(ctx, vector); err != nil {
 						return err
 					}
+				} else {
+					verbosef(logger, "skipping feature vector persistence for %s (dry run)", sample.Path)
 				}
 				processed++
 			}

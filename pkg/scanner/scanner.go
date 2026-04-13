@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,6 +34,7 @@ type Options struct {
 	FollowSymlink bool
 	IncludeHidden bool
 	Formats       map[string]core.AudioFormat
+	Logger        *log.Logger
 }
 
 type Scanner struct {
@@ -40,6 +42,7 @@ type Scanner struct {
 	followSymlink bool
 	includeHidden bool
 	formats       map[string]core.AudioFormat
+	logger        *log.Logger
 }
 
 type candidate struct {
@@ -66,6 +69,7 @@ func New(opts Options) *Scanner {
 		followSymlink: opts.FollowSymlink,
 		includeHidden: opts.IncludeHidden,
 		formats:       formats,
+		logger:        opts.Logger,
 	}
 }
 
@@ -73,6 +77,8 @@ func (s *Scanner) Scan(ctx context.Context, roots ...string) ([]core.Sample, err
 	if len(roots) == 0 {
 		return nil, errors.New("scan requires at least one root")
 	}
+
+	s.logf("starting scan with %d root(s) and %d worker(s)", len(roots), s.workers)
 
 	candidates := make(chan candidate)
 	results := make(chan core.Sample)
@@ -134,6 +140,7 @@ func (s *Scanner) Scan(ctx context.Context, roots ...string) ([]core.Sample, err
 				sort.Slice(samples, func(i, j int) bool {
 					return samples[i].Path < samples[j].Path
 				})
+				s.logf("scan complete: discovered %d audio file(s)", len(samples))
 				return samples, nil
 			}
 			samples = append(samples, sample)
@@ -163,6 +170,8 @@ func (s *Scanner) walkRoot(ctx context.Context, root string, out chan<- candidat
 	if !info.IsDir() {
 		return fmt.Errorf("scan root %q is not a directory", absRoot)
 	}
+
+	s.logf("walking root %s", absRoot)
 
 	return filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -194,6 +203,8 @@ func (s *Scanner) walkRoot(ctx context.Context, root string, out chan<- candidat
 		if _, ok := s.formats[ext]; !ok {
 			return nil
 		}
+
+		s.logf("scanning file %s", path)
 
 		select {
 		case <-ctx.Done():
@@ -240,4 +251,10 @@ func (s *Scanner) statCandidate(root, path string) (core.Sample, error) {
 
 func isHidden(name string) bool {
 	return strings.HasPrefix(name, ".")
+}
+
+func (s *Scanner) logf(format string, args ...any) {
+	if s.logger != nil {
+		s.logger.Printf(format, args...)
+	}
 }

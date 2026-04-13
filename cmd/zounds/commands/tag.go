@@ -17,12 +17,15 @@ import (
 
 func newTagCommand(cfg *Config) *cobra.Command {
 	var (
-		auto       bool
-		list       bool
-		path       string
-		addTags    []string
-		removeTags []string
-		ruleFile   string
+		auto         bool
+		list         bool
+		path         string
+		addTags      []string
+		removeTags   []string
+		ruleFile     string
+		clapModelDir string
+		clapLib      string
+		clapLabels   []string
 	)
 
 	cmd := &cobra.Command{
@@ -48,7 +51,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 
 			switch {
 			case auto:
-				return runAutoTagging(ctx, cmd, repo, cfg, path, ruleFile)
+				return runAutoTagging(ctx, cmd, repo, cfg, path, ruleFile, clapModelDir, clapLib, clapLabels)
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
@@ -68,11 +71,14 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	flags.StringSliceVar(&addTags, "add", nil, "manually add one or more tags")
 	flags.StringSliceVar(&removeTags, "remove", nil, "manually remove one or more tags")
 	flags.StringVar(&ruleFile, "rule-file", "", "optional JSON rule config for expr-based rule tagging")
+	flags.StringVar(&clapModelDir, "clap-model-dir", "", "path to directory containing CLAP ONNX models and tokenizer.json (enables CLAP tagging)")
+	flags.StringVar(&clapLib, "clap-lib", "", "path to the ONNX Runtime shared library (default: platform search path)")
+	flags.StringSliceVar(&clapLabels, "clap-label", nil, "text labels to classify audio against with CLAP (default: built-in list)")
 
 	return cmd
 }
 
-func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile string) error {
+func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string) error {
 	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
 	if err != nil {
 		return err
@@ -112,6 +118,15 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	}
 	if err != nil {
 		return err
+	}
+
+	var clapTagger *tags.LocalCLAPTagger
+	if strings.TrimSpace(clapModelDir) != "" {
+		clapTagger, err = tags.NewLocalCLAPTagger(clapModelDir, clapLib, clapLabels, 0, 0)
+		if err != nil {
+			return fmt.Errorf("initialise CLAP tagger: %w", err)
+		}
+		defer func() { _ = clapTagger.Close() }()
 	}
 
 	applied := 0
@@ -166,6 +181,13 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		generated = append(generated, pathTags...)
 		generated = append(generated, metadataTags...)
 		generated = append(generated, ruleTags...)
+		if clapTagger != nil {
+			clapTags, err := clapTagger.Tags(ctx, sample, combined)
+			if err != nil {
+				return err
+			}
+			generated = append(generated, clapTags...)
+		}
 		generated = dedupeGeneratedTags(generated)
 
 		if cfg.DryRun {

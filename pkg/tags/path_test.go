@@ -25,8 +25,6 @@ func TestPathTaggerExtractsNormalizedUniqueTags(t *testing.T) {
 		"kicks":  {},
 		"dark":   {},
 		"glitch": {},
-		"hit":    {},
-		"01":     {},
 	}
 
 	if len(got) != len(expected) {
@@ -40,5 +38,21 @@ func TestPathTaggerExtractsNormalizedUniqueTags(t *testing.T) {
 		if tag.Source != "path" {
 			t.Fatalf("unexpected tag source: %s", tag.Source)
 		}
+	}
+}
+
+func TestPathTaggerSkipsGenericAndPurelyNumericTokens(t *testing.T) {
+	t.Parallel()
+
+	tagger := tags.NewPathTagger()
+	got, err := tagger.Tags(context.Background(), core.Sample{
+		RelativePath: "Library/Samples/FX Pack/Kick_001.wav",
+	}, core.AnalysisResult{})
+	if err != nil {
+		t.Fatalf("extract path tags: %v", err)
+	}
+
+	if len(got) != 1 || got[0].NormalizedName != "kick" {
+		t.Fatalf("unexpected filtered tags %#v", got)
 	}
 }

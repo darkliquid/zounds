@@ -29,7 +29,8 @@ main {
 }
 
 .controls input,
-.controls select {
+.controls select,
+.cluster-toolbar select {
   display: block;
   margin-top: 0.35rem;
   padding: 0.6rem 0.75rem;
@@ -64,6 +65,22 @@ button:hover {
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 1rem;
+}
+
+.browser-tabs {
+  display: inline-flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.browser-tab,
+.cluster-item {
+  background: #374151;
+}
+
+.browser-tab.active,
+.cluster-item.active {
+  background: #0f766e;
 }
 
 .tag-cloud {
@@ -101,12 +118,26 @@ button.tag.active {
   padding-left: 0;
 }
 
+.cluster-browser {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 1rem;
+}
+
+.cluster-toolbar {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  margin-bottom: 0.75rem;
+}
+
 .cluster-map {
   width: 100%;
   height: auto;
   margin-bottom: 0.75rem;
   background: #111827;
   border-radius: 0.5rem;
+  touch-action: none;
 }
 
 .cluster-bubble {
@@ -115,25 +146,59 @@ button.tag.active {
   stroke-width: 2;
 }
 
+.cluster-bubble.active {
+  fill: rgba(15, 118, 110, 0.55);
+  stroke: #2dd4bf;
+}
+
+.cluster-member {
+  fill: #bfdbfe;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.cluster-member.active {
+  fill: #f59e0b;
+}
+
 .cluster-label {
   fill: #e5e7eb;
-  font-size: 0.55rem;
+  font-size: 0.9rem;
   text-anchor: middle;
   dominant-baseline: middle;
   pointer-events: none;
 }
 
+.cluster-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+}
+
+.cluster-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.cluster-item {
+  width: 100%;
+  border-radius: 0.75rem;
+  text-align: left;
+}
+
 .sample-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
+  display: block;
   padding: 0.9rem 0;
   border-bottom: 1px solid #374151;
 }
 
+.sample-row.active {
+  border-color: #2dd4bf;
+}
+
 .sample-meta {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .sample-path {
@@ -149,11 +214,6 @@ button.tag.active {
   background: #0f766e;
 }
 
-.preview {
-  display: grid;
-  gap: 0.75rem;
-}
-
 .hidden {
   display: none;
 }
@@ -166,16 +226,18 @@ audio {
   .hero,
   .controls,
   .layout,
-  .sample-row {
+  .cluster-browser,
+  .cluster-toolbar {
     display: block;
   }
 
-  .controls input {
+  .controls input,
+  .cluster-toolbar select {
     min-width: 0;
     width: 100%;
   }
 
-  .sample-row button {
+  .cluster-toolbar button {
     margin-top: 0.75rem;
   }
 }

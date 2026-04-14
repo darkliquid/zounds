@@ -19,15 +19,17 @@ import (
 
 func newTagCommand(cfg *Config) *cobra.Command {
 	var (
-		auto         bool
-		list         bool
-		path         string
-		addTags      []string
-		removeTags   []string
-		ruleFile     string
-		clapModelDir string
-		clapLib      string
-		clapLabels   []string
+		auto             bool
+		list             bool
+		path             string
+		addTags          []string
+		removeTags       []string
+		ruleFile         string
+		clapModelDir     string
+		clapLib          string
+		clapLabels       []string
+		clapMinScore     float32
+		clapMaxPredicted int
 	)
 
 	cmd := &cobra.Command{
@@ -53,7 +55,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 
 			switch {
 			case auto:
-				return runAutoTagging(ctx, cmd, repo, cfg, path, ruleFile, clapModelDir, clapLib, clapLabels)
+				return runAutoTagging(ctx, cmd, repo, cfg, path, ruleFile, clapModelDir, clapLib, clapLabels, clapMinScore, clapMaxPredicted)
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
@@ -76,11 +78,13 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	flags.StringVar(&clapModelDir, "clap-model-dir", "", "path to directory containing CLAP ONNX models and tokenizer.json (enables CLAP tagging)")
 	flags.StringVar(&clapLib, "clap-lib", "", "path to the ONNX Runtime shared library (default: platform search path)")
 	flags.StringSliceVar(&clapLabels, "clap-label", nil, "text labels to classify audio against with CLAP (default: built-in list)")
+	flags.Float32Var(&clapMinScore, "clap-min-score", 0, "minimum CLAP similarity score required before a label is emitted")
+	flags.IntVar(&clapMaxPredicted, "clap-max-predicted", 0, "maximum number of CLAP labels to emit per sample")
 
 	return cmd
 }
 
-func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string) error {
+func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string, clapMinScore float32, clapMaxPredicted int) error {
 	logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
 
 	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
@@ -126,7 +130,7 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 
 	var clapTagger *tags.LocalCLAPTagger
 	if strings.TrimSpace(clapModelDir) != "" {
-		clapTagger, err = tags.NewLocalCLAPTagger(clapModelDir, clapLib, clapLabels, 0, 0)
+		clapTagger, err = tags.NewLocalCLAPTagger(clapModelDir, clapLib, clapLabels, clapMinScore, clapMaxPredicted)
 		if err != nil {
 			return fmt.Errorf("initialise CLAP tagger: %w", err)
 		}

@@ -18,13 +18,6 @@
           Search
           <input id="search" type="search" placeholder="impact, pad, glitch...">
         </label>
-        <label>
-          Projection
-          <select id="projection">
-            <option value="tsne">t-SNE</option>
-            <option value="pca">PCA</option>
-          </select>
-        </label>
         <button id="clear-filters" type="button">Clear filters</button>
       </div>
     </header>
@@ -33,31 +26,54 @@
       <h2>Library</h2>
       <p id="summary" class="lede"></p>
       <div id="active-filter" class="filter-chip hidden"></div>
-      <div class="layout">
-        <aside>
-          <h3>Tags</h3>
-          <div id="tags" class="tag-cloud"></div>
+      <div class="browser-tabs" role="tablist" aria-label="Library browsers">
+        <button id="tab-search" type="button" class="browser-tab active" role="tab" aria-controls="browser-search" aria-selected="true">Search browser</button>
+        <button id="tab-clusters" type="button" class="browser-tab" role="tab" aria-controls="browser-clusters" aria-selected="false">Cluster browser</button>
+      </div>
 
-          <h3>Clusters</h3>
-          <svg id="cluster-map" class="cluster-map" viewBox="0 0 280 240" aria-label="Cluster visualization"></svg>
-          <ul id="clusters" class="plain-list"></ul>
-        </aside>
+      <div id="browser-search" class="browser-panel">
+        <div class="layout">
+          <aside>
+            <h3>Tags</h3>
+            <div id="tags" class="tag-cloud"></div>
+          </aside>
 
-        <div>
-          <h3>Samples</h3>
-          <ul id="samples" class="sample-list"></ul>
+          <div>
+            <h3>Samples</h3>
+            <ul id="samples" class="sample-list"></ul>
+          </div>
         </div>
       </div>
-    </section>
 
-    <section>
-      <h2>Preview</h2>
-      <div id="preview-empty" class="lede">Select a sample to preview it.</div>
-      <div id="preview" class="preview hidden">
-        <h3 id="preview-title"></h3>
-        <p id="preview-path" class="lede"></p>
-        <div id="preview-tags" class="tag-cloud"></div>
-        <audio id="player" controls preload="none"></audio>
+      <div id="browser-clusters" class="browser-panel hidden">
+        <div class="cluster-browser">
+          <div class="cluster-canvas">
+            <div class="cluster-toolbar">
+              <label>
+                Projection
+                <select id="projection">
+                  <option value="tsne">t-SNE</option>
+                  <option value="pca">PCA</option>
+                </select>
+              </label>
+              <button id="reset-cluster-view" type="button">Reset view</button>
+            </div>
+            <svg id="cluster-map" class="cluster-map" viewBox="0 0 1000 700" aria-label="Cluster visualization"></svg>
+            <p class="lede">Drag to pan, scroll to zoom, and click a cluster or point to inspect the sounds inside it.</p>
+          </div>
+
+          <aside class="cluster-sidebar">
+            <h3>Clusters</h3>
+            <ul id="clusters" class="plain-list cluster-list"></ul>
+
+            <div id="cluster-selection-empty" class="lede">Select a cluster to browse its sounds.</div>
+            <div id="cluster-selection" class="hidden">
+              <h3 id="cluster-title"></h3>
+              <p id="cluster-summary" class="lede"></p>
+              <ul id="cluster-samples" class="sample-list"></ul>
+            </div>
+          </aside>
+        </div>
       </div>
     </section>
   </main>

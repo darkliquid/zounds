@@ -4,11 +4,38 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
 const pathTaggerVersion = "0.1.0"
+
+var ignoredPathTokens = map[string]struct{}{
+	"audio":   {},
+	"clip":    {},
+	"clips":   {},
+	"file":    {},
+	"files":   {},
+	"fx":      {},
+	"hit":     {},
+	"hits":    {},
+	"library": {},
+	"loop":    {},
+	"loops":   {},
+	"one":     {},
+	"pack":    {},
+	"sample":  {},
+	"samples": {},
+	"shot":    {},
+	"shots":   {},
+	"sound":   {},
+	"sounds":  {},
+	"stem":    {},
+	"stems":   {},
+	"track":   {},
+	"tracks":  {},
+}
 
 type PathTagger struct{}
 
@@ -44,7 +71,7 @@ func (PathTagger) Tags(_ context.Context, sample core.Sample, _ core.AnalysisRes
 		segment = strings.TrimSuffix(segment, filepath.Ext(segment))
 		for _, token := range tokenizePathSegment(segment) {
 			normalized := core.NormalizeTagName(token)
-			if normalized == "" {
+			if !isUsefulPathToken(normalized) {
 				continue
 			}
 			if _, ok := seen[normalized]; ok {
@@ -75,4 +102,34 @@ func tokenizePathSegment(segment string) []string {
 	}, segment)
 
 	return strings.Fields(segment)
+}
+
+func isUsefulPathToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	if _, ignored := ignoredPathTokens[token]; ignored {
+		return false
+	}
+	if len(token) < 2 {
+		return false
+	}
+	if allDigits(token) {
+		switch token {
+		case "606", "707", "808", "909":
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func allDigits(value string) bool {
+	for _, r := range value {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return value != ""
 }

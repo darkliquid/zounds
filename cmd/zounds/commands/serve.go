@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/darkliquid/zounds/web"
 	"github.com/spf13/cobra"
@@ -18,7 +19,7 @@ func newServeCommand(cfg *Config) *cobra.Command {
 		Use:   "serve",
 		Short: "Run the web UI and API server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServe(cmd.Context(), cfg, addr, port)
+			return runServe(cmd.Context(), cfg, addr, port, newVerboseLogger(cfg, cmd.ErrOrStderr()))
 		},
 	}
 
@@ -29,16 +30,16 @@ func newServeCommand(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func runServe(ctx context.Context, cfg *Config, addr string, port int) error {
-	repo, closer, err := openRepository(ctx, cfg)
+func runServe(ctx context.Context, cfg *Config, addr string, port int, logger *log.Logger) error {
+	if port <= 0 {
+		return fmt.Errorf("port must be greater than zero")
+	}
+
+	repo, closer, err := openRepository(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = closer.Close() }()
 
-	if port <= 0 {
-		return fmt.Errorf("port must be greater than zero")
-	}
-
-	return web.ListenAndServe(ctx, fmt.Sprintf("%s:%d", addr, port), repo)
+	return web.ListenAndServe(ctx, fmt.Sprintf("%s:%d", addr, port), repo, logger)
 }

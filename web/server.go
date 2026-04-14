@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/darkliquid/zounds/pkg/cluster"
 	"github.com/darkliquid/zounds/pkg/core"
@@ -54,6 +57,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type sampleResponse struct {
 	core.Sample
 	Tags []core.Tag `json:"tags,omitempty"`
+}
+
+type clusterMemberResponse struct {
+	sampleResponse
+	Score float64 `json:"score,omitempty"`
+	X     float64 `json:"x,omitempty"`
+	Y     float64 `json:"y,omitempty"`
+}
+
+type clusterResponse struct {
+	core.Cluster
+	Samples []int64                 `json:"samples,omitempty"`
+	Members []clusterMemberResponse `json:"members,omitempty"`
+	X       float64                 `json:"x,omitempty"`
+	Y       float64                 `json:"y,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -244,19 +262,13 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type clusterResponse struct {
-		core.Cluster
-		Samples []int64 `json:"samples,omitempty"`
-		X       float64 `json:"x,omitempty"`
-		Y       float64 `json:"y,omitempty"`
-	}
-
 	pointBySample, err := s.projectClusterMembers(r.Context(), projection)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
+	sampleCache := make(map[int64]sampleResponse)
 	out := make([]clusterResponse, 0, len(clusters))
 	for _, cluster := range clusters {
 		members, err := s.repo.ListClusterMembers(r.Context(), cluster.ID)
@@ -264,19 +276,10 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		samples := make([]int64, 0, len(members))
-		var sumX, sumY float64
-		for _, member := range members {
-			samples = append(samples, member.SampleID)
-			if point, ok := pointBySample[member.SampleID]; ok {
-				sumX += point.X
-				sumY += point.Y
-			}
-		}
-		response := clusterResponse{Cluster: cluster, Samples: samples}
-		if len(samples) > 0 {
-			response.X = sumX / float64(len(samples))
-			response.Y = sumY / float64(len(samples))
+		response, err := s.buildClusterResponse(r.Context(), cluster, members, pointBySample, sampleCache)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
 		}
 		out = append(out, response)
 	}
@@ -329,15 +332,18 @@ func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type clusterResponse struct {
-		core.Cluster
-		Samples []int64 `json:"samples,omitempty"`
+	pointBySample, err := s.projectClusterMembers(r.Context(), "tsne")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
-	samples := make([]int64, 0, len(members))
-	for _, member := range members {
-		samples = append(samples, member.SampleID)
+
+	response, err := s.buildClusterResponse(r.Context(), cluster, members, pointBySample, make(map[int64]sampleResponse))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, clusterResponse{Cluster: cluster, Samples: samples})
+	writeJSON(w, http.StatusOK, response)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -360,6 +366,63 @@ func filterSamplesByQuery(samples []core.Sample, query string) []core.Sample {
 	return filtered
 }
 
+func (s *Server) buildClusterResponse(ctx context.Context, cluster core.Cluster, members []db.ClusterMember, pointBySample map[int64]cluster.ProjectionPoint, sampleCache map[int64]sampleResponse) (clusterResponse, error) {
+	response := clusterResponse{
+		Cluster: cluster,
+		Samples: make([]int64, 0, len(members)),
+		Members: make([]clusterMemberResponse, 0, len(members)),
+	}
+	var (
+		sumX, sumY float64
+		projected  int
+	)
+	for _, member := range members {
+		response.Samples = append(response.Samples, member.SampleID)
+
+		sample, err := s.sampleResponseByID(ctx, member.SampleID, sampleCache)
+		if err != nil {
+			return clusterResponse{}, err
+		}
+
+		memberResponse := clusterMemberResponse{
+			sampleResponse: sample,
+			Score:          member.Score,
+		}
+		if point, ok := pointBySample[member.SampleID]; ok {
+			memberResponse.X = point.X
+			memberResponse.Y = point.Y
+			sumX += point.X
+			sumY += point.Y
+			projected++
+		}
+		response.Members = append(response.Members, memberResponse)
+	}
+	if projected > 0 {
+		response.X = sumX / float64(projected)
+		response.Y = sumY / float64(projected)
+	}
+	return response, nil
+}
+
+func (s *Server) sampleResponseByID(ctx context.Context, sampleID int64, sampleCache map[int64]sampleResponse) (sampleResponse, error) {
+	if cached, ok := sampleCache[sampleID]; ok {
+		return cached, nil
+	}
+
+	sample, err := s.repo.FindSampleByID(ctx, sampleID)
+	if err != nil {
+		return sampleResponse{}, err
+	}
+	tags, err := s.repo.ListTagsForSample(ctx, sampleID)
+	if err != nil {
+		return sampleResponse{}, err
+	}
+
+	response := sampleResponse{Sample: sample, Tags: tags}
+	sampleCache[sampleID] = response
+	return response, nil
+}
+
 func (s *Server) findClusterByID(ctx context.Context, id int64) (core.Cluster, []db.ClusterMember, bool, error) {
 	for _, method := range []string{"kmeans", "dbscan"} {
 		clusters, err := s.repo.ListClustersByMethod(ctx, method)
@@ -380,20 +443,31 @@ func (s *Server) findClusterByID(ctx context.Context, id int64) (core.Cluster, [
 	return core.Cluster{}, nil, false, nil
 }
 
-func ListenAndServe(ctx context.Context, addr string, repo *db.Repository) error {
+func ListenAndServe(ctx context.Context, addr string, repo *db.Repository, logger *log.Logger) error {
 	server, err := NewServer(repo)
 	if err != nil {
 		return err
 	}
 
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
+
+	handler := server.Handler()
+	if logger != nil {
+		handler = withRequestLogging(handler, logger)
+		logger.Printf("serving web ui on http://%s", listener.Addr().String())
+	}
+
 	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: server,
+		Handler: handler,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- httpServer.ListenAndServe()
+		errCh <- httpServer.Serve(listener)
 	}()
 
 	select {
@@ -406,4 +480,27 @@ func ListenAndServe(ctx context.Context, addr string, repo *db.Repository) error
 		}
 		return err
 	}
+}
+
+func withRequestLogging(next http.Handler, logger *log.Logger) http.Handler {
+	if logger == nil {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		recorder := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		logger.Printf("%s %s %d %s", r.Method, r.URL.RequestURI(), recorder.status, time.Since(started).Round(time.Millisecond))
+	})
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }

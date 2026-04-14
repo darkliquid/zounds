@@ -1,13 +1,17 @@
 package web_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,15 +249,73 @@ func TestServerProjectsClustersForVisualization(t *testing.T) {
 	}
 
 	var payload []struct {
-		ID int64
-		X  float64
-		Y  float64
+		ID      int64
+		X       float64
+		Y       float64
+		Members []struct {
+			ID int64
+			X  float64
+			Y  float64
+		}
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(payload) != 1 || payload[0].ID == 0 {
 		t.Fatalf("unexpected cluster payload %#v", payload)
+	}
+	if len(payload[0].Members) != 2 {
+		t.Fatalf("expected projected cluster members, got %#v", payload[0].Members)
+	}
+}
+
+func TestListenAndServeVerboseLogsBindAndRequests(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	serverLogger := &bytes.Buffer{}
+	logger := log.New(serverLogger, "", 0)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- web.ListenAndServe(ctx, addr, repo, logger)
+	}()
+
+	var healthErr error
+	for range 50 {
+		resp, err := http.Get("http://" + addr + "/api/health")
+		if err == nil {
+			_ = resp.Body.Close()
+			healthErr = nil
+			break
+		}
+		healthErr = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	if healthErr != nil {
+		t.Fatalf("health request never succeeded: %v", healthErr)
+	}
+
+	cancel()
+	if err := <-errCh; err != context.Canceled {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+
+	logOutput := serverLogger.String()
+	for _, want := range []string{"serving web ui on http://" + addr, "GET /api/health 200"} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("expected %q in log output %q", want, logOutput)
+		}
 	}
 }
 

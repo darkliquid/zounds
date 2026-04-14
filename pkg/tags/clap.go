@@ -3,6 +3,7 @@ package tags
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/audio/codecs"
@@ -12,13 +13,18 @@ import (
 
 const localCLAPTaggerVersion = "0.1.0"
 
+const (
+	defaultCLAPMinScore     = 0.32
+	defaultCLAPMaxPredicted = 3
+	defaultCLAPScoreSlack   = 0.05
+)
+
 // defaultCLAPLabels is the built-in set of audio descriptors used when the
 // caller does not supply an explicit label list.
 var defaultCLAPLabels = []string{
-	"ambient", "analogue", "atmospheric", "bass", "bell", "bright",
-	"cinematic", "classical", "cyberpunk", "dark", "distorted", "drone",
-	"epic", "glitch", "industrial", "lead", "lofi", "metallic", "pad",
-	"percussive", "plucked", "retro", "sub", "texture", "vocal",
+	"bass", "bell", "clap", "drone", "glitch", "hi hat", "impact",
+	"kick", "lead", "metallic", "pad", "percussive", "pluck",
+	"snare", "sub bass", "sweep", "vocal chop",
 }
 
 // LocalCLAPTagger tags audio samples using a locally hosted CLAP ONNX model.
@@ -32,6 +38,7 @@ type LocalCLAPTagger struct {
 	model        *clap.Model
 	registry     *zaudio.Registry
 	labels       []string
+	defaultsUsed bool
 	minScore     float32
 	maxPredicted int
 }
@@ -52,16 +59,17 @@ type LocalCLAPTagger struct {
 //
 // maxPredicted caps how many tags are returned per sample (default 5).
 func NewLocalCLAPTagger(modelDir, libPath string, labels []string, minScore float32, maxPredicted int) (*LocalCLAPTagger, error) {
+	defaultsUsed := len(labels) == 0
 	if len(labels) == 0 {
 		labels = append([]string(nil), defaultCLAPLabels...)
 	} else {
 		labels = append([]string(nil), labels...)
 	}
 	if minScore <= 0 {
-		minScore = 0.2
+		minScore = defaultCLAPMinScore
 	}
 	if maxPredicted <= 0 {
-		maxPredicted = 5
+		maxPredicted = defaultCLAPMaxPredicted
 	}
 
 	cfg := clap.DefaultConfig()
@@ -82,6 +90,7 @@ func NewLocalCLAPTagger(modelDir, libPath string, labels []string, minScore floa
 		model:        model,
 		registry:     registry,
 		labels:       labels,
+		defaultsUsed: defaultsUsed,
 		minScore:     minScore,
 		maxPredicted: maxPredicted,
 	}, nil
@@ -111,12 +120,20 @@ func (t *LocalCLAPTagger) Tags(ctx context.Context, sample core.Sample, _ core.A
 		return nil, fmt.Errorf("CLAP classify %q: %w", sample.Path, err)
 	}
 
+	return t.tagsForScores(scores), nil
+}
+
+func (t *LocalCLAPTagger) tagsForScores(scores []clap.LabelScore) []core.Tag {
 	out := make([]core.Tag, 0, t.maxPredicted)
+	scoreFloor := t.minScore
+	if t.defaultsUsed && len(scores) > 0 {
+		scoreFloor = maxFloat32(scoreFloor, scores[0].Score-defaultCLAPScoreSlack)
+	}
 	for _, s := range scores {
 		if len(out) >= t.maxPredicted {
 			break
 		}
-		if s.Score < t.minScore {
+		if s.Score < scoreFloor {
 			break // scores are sorted descending, so we can stop early
 		}
 		name := core.NormalizeTagName(s.Label)
@@ -130,5 +147,26 @@ func (t *LocalCLAPTagger) Tags(ctx context.Context, sample core.Sample, _ core.A
 			Confidence:     float64(s.Score),
 		})
 	}
-	return out, nil
+	slices.SortFunc(out, func(left, right core.Tag) int {
+		switch {
+		case left.Confidence > right.Confidence:
+			return -1
+		case left.Confidence < right.Confidence:
+			return 1
+		case left.NormalizedName < right.NormalizedName:
+			return -1
+		case left.NormalizedName > right.NormalizedName:
+			return 1
+		default:
+			return 0
+		}
+	})
+	return out
+}
+
+func maxFloat32(left, right float32) float32 {
+	if left > right {
+		return left
+	}
+	return right
 }

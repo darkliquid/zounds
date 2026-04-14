@@ -55,7 +55,7 @@ func TestTagCommandAutoAppliesPathTags(t *testing.T) {
 	for _, tag := range got {
 		names[tag.NormalizedName] = struct{}{}
 	}
-	for _, expected := range []string{"drums", "dark", "hits", "impact"} {
+	for _, expected := range []string{"drums", "dark", "impact"} {
 		if _, ok := names[expected]; !ok {
 			t.Fatalf("missing auto tag %q in %v", expected, names)
 		}

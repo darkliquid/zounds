@@ -45,7 +45,7 @@ func TestRootCommandIncludesPlannedSubcommands(t *testing.T) {
 
 	cmd := commands.NewRootCommand()
 
-	expected := []string{"scan", "analyze", "tag", "cluster", "dedup", "convert", "rename", "serve", "export", "info", "play", "browse"}
+	expected := []string{"scan", "analyze", "tag", "similar", "cluster", "dedup", "convert", "rename", "serve", "export", "info", "play", "browse"}
 	seen := make(map[string]struct{}, len(cmd.Commands()))
 	for _, subcommand := range cmd.Commands() {
 		seen[subcommand.Name()] = struct{}{}

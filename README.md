@@ -25,6 +25,7 @@ Implemented commands:
 zounds scan
 zounds analyze
 zounds tag
+zounds similar
 zounds cluster
 zounds dedup
 zounds convert
@@ -42,6 +43,7 @@ Examples:
 zounds scan ~/Samples
 zounds analyze --all
 zounds tag --auto --rule-file ./rules.json --clap-model-dir ./models/clap
+zounds similar --threshold 0.85 --limit 20 ./Samples/Kicks/punch.wav ./Samples/Snares/crack.wav
 zounds cluster --method kmeans --k 12 --projection tsne
 zounds dedup --perceptual --threshold 8
 zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dry-run

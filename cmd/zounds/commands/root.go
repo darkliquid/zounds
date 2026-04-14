@@ -29,6 +29,7 @@ func NewRootCommand() *cobra.Command {
 		newScanCommand(&cfg),
 		newAnalyzeCommand(&cfg),
 		newTagCommand(&cfg),
+		newSimilarCommand(&cfg),
 		newClusterCommand(&cfg),
 		newDedupCommand(&cfg),
 		newConvertCommand(&cfg),

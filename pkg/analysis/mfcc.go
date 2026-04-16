@@ -138,12 +138,6 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 	return accum
 }
 
-func powerSpectrum(coeff []complex128) []float64 {
-	limit := len(coeff)/2 + 1
-	power := make([]float64, limit)
-	return powerSpectrumInto(coeff, power)
-}
-
 // powerSpectrumInto writes as many bins as fit into power and returns the
 // valid prefix containing computed power-spectrum values. The returned slice
 // aliases power and is only valid until power is reused.
@@ -201,12 +195,6 @@ func melFilterBank(filterCount, fftSize, sampleRate int) [][]float64 {
 	return filters
 }
 
-func applyFilterBank(power []float64, filters [][]float64) []float64 {
-	energies := make([]float64, len(filters))
-	applyFilterBankInto(power, filters, energies)
-	return energies
-}
-
 func applyFilterBankInto(power []float64, filters [][]float64, energies []float64) {
 	for i, filter := range filters {
 		var sum float64
@@ -218,15 +206,6 @@ func applyFilterBankInto(power []float64, filters [][]float64, energies []float6
 		}
 		energies[i] = sum
 	}
-}
-
-func dct(values []float64, coeffCount int) []float64 {
-	if coeffCount > len(values) {
-		coeffCount = len(values)
-	}
-	coeffs := make([]float64, coeffCount)
-	dctInto(values, coeffs)
-	return coeffs
 }
 
 func dctInto(values, coeffs []float64) {

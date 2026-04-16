@@ -208,9 +208,9 @@ func applyHannWindow(frame []float64) {
 	if n <= 1 {
 		return
 	}
-	denom := float64(n - 1)
+	windowDenominator := float64(n - 1)
 	for i := range frame {
-		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/denom))
+		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/windowDenominator))
 	}
 }
 

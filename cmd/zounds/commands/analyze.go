@@ -170,6 +170,11 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 		go func(index int, analyzer core.Analyzer) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					errs[index] = fmt.Errorf("%s analysis panicked: %v", analyzer.Name(), recovered)
+				}
+			}()
 			result, err := analyzer.Analyze(ctx, sample)
 			if err != nil {
 				errs[index] = fmt.Errorf("%s analysis failed: %w", analyzer.Name(), err)

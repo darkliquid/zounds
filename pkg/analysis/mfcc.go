@@ -227,16 +227,17 @@ func dct(values []float64, coeffCount int) []float64 {
 }
 
 func dctInto(values, coeffs []float64) {
-	if len(coeffs) > len(values) {
-		coeffs = coeffs[:len(values)]
+	output := coeffs
+	if len(output) > len(values) {
+		output = output[:len(values)]
 	}
 	n := float64(len(values))
-	for k := range coeffs {
+	for k := range output {
 		var sum float64
 		for i, value := range values {
 			sum += value * math.Cos(math.Pi*float64(k)*(float64(i)+0.5)/n)
 		}
-		coeffs[k] = sum
+		output[k] = sum
 	}
 }
 

@@ -110,15 +110,18 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 
 	fft := fourier.NewFFT(windowSize)
 	average := make([]float64, windowSize/2+1)
+	frame := make([]float64, windowSize)
+	mags := make([]float64, windowSize/2+1)
+	prev := make([]float64, windowSize/2+1)
 	var (
 		frameCount   int
 		totalFlux    float64
-		prev         []float64
+		hasPrev      bool
 		contrastSums [7]float64
 	)
 
 	for start := 0; start < len(mono); start += hopSize {
-		frame := make([]float64, windowSize)
+		clear(frame)
 		end := start + windowSize
 		if end > len(mono) {
 			end = len(mono)
@@ -127,29 +130,30 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		mags := magnitudeSpectrum(coeff)
+		current := magnitudeSpectrumInto(coeff, mags)
 
-		for i, mag := range mags {
+		for i, mag := range current {
 			average[i] += mag
 		}
 
-		if prev != nil {
+		if hasPrev {
 			var flux float64
-			for i, mag := range mags {
+			for i, mag := range current {
 				diff := mag - prev[i]
 				if diff > 0 {
 					flux += diff
 				}
 			}
-			totalFlux += flux / float64(len(mags))
+			totalFlux += flux / float64(len(current))
 		}
 
-		contrast := spectralContrast(mags, buffer.SampleRate, fft, len(contrastSums))
+		contrast := spectralContrast(current, buffer.SampleRate, fft, len(contrastSums))
 		for i := range contrastSums {
 			contrastSums[i] += contrast[i]
 		}
 
-		prev = mags
+		copy(prev, current)
+		hasPrev = true
 		frameCount++
 		if end == len(mono) {
 			break
@@ -204,18 +208,31 @@ func applyHannWindow(frame []float64) {
 	if n <= 1 {
 		return
 	}
+	hannWindowDenominator := float64(n - 1)
+	hannWindowFactor := (2 * math.Pi) / hannWindowDenominator
 	for i := range frame {
-		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/float64(n-1)))
+		frame[i] *= 0.5 * (1 - math.Cos(hannWindowFactor*float64(i)))
 	}
 }
 
 func magnitudeSpectrum(coeff []complex128) []float64 {
 	limit := len(coeff)/2 + 1
 	mags := make([]float64, limit)
+	return magnitudeSpectrumInto(coeff, mags)
+}
+
+// magnitudeSpectrumInto writes as many bins as fit into mags and returns the
+// valid prefix containing computed magnitudes. The returned slice aliases mags
+// and is only valid until mags is reused.
+func magnitudeSpectrumInto(coeff []complex128, mags []float64) []float64 {
+	limit := len(coeff)/2 + 1
+	if len(mags) < limit {
+		limit = len(mags)
+	}
 	for i := 0; i < limit; i++ {
 		mags[i] = cmplxAbs(coeff[i])
 	}
-	return mags
+	return mags[:limit]
 }
 
 func spectralCentroid(mags []float64, sampleRate int, fft *fourier.FFT) float64 {

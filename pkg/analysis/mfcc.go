@@ -90,10 +90,15 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 	fft := fourier.NewFFT(windowSize)
 	filterBank := melFilterBank(filterCount, windowSize, buffer.SampleRate)
 	accum := make([]float64, coeffCount)
+	frame := make([]float64, windowSize)
+	power := make([]float64, windowSize/2+1)
+	energies := make([]float64, len(filterBank))
+	logEnergies := make([]float64, len(filterBank))
+	frameCoeffs := make([]float64, coeffCount)
 	frameCount := 0
 
 	for start := 0; start < len(mono); start += hopSize {
-		frame := make([]float64, windowSize)
+		clear(frame)
 		end := start + windowSize
 		if end > len(mono) {
 			end = len(mono)
@@ -102,9 +107,8 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		power := powerSpectrum(coeff)
-		energies := applyFilterBank(power, filterBank)
-		logEnergies := make([]float64, len(energies))
+		current := powerSpectrumInto(coeff, power)
+		applyFilterBankInto(current, filterBank, energies)
 		for i, energy := range energies {
 			if energy <= 1e-12 {
 				energy = 1e-12
@@ -112,7 +116,7 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 			logEnergies[i] = math.Log(energy)
 		}
 
-		frameCoeffs := dct(logEnergies, coeffCount)
+		dctInto(logEnergies, frameCoeffs)
 		for i, value := range frameCoeffs {
 			accum[i] += value
 		}
@@ -134,15 +138,20 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 	return accum
 }
 
-func powerSpectrum(coeff []complex128) []float64 {
+// powerSpectrumInto writes as many bins as fit into power and returns the
+// valid prefix containing computed power-spectrum values. The returned slice
+// aliases power and is only valid until power is reused.
+func powerSpectrumInto(coeff []complex128, power []float64) []float64 {
 	limit := len(coeff)/2 + 1
-	power := make([]float64, limit)
+	if len(power) < limit {
+		limit = len(power)
+	}
 	for i := 0; i < limit; i++ {
 		realPart := real(coeff[i])
 		imagPart := imag(coeff[i])
 		power[i] = realPart*realPart + imagPart*imagPart
 	}
-	return power
+	return power[:limit]
 }
 
 func melFilterBank(filterCount, fftSize, sampleRate int) [][]float64 {
@@ -186,8 +195,7 @@ func melFilterBank(filterCount, fftSize, sampleRate int) [][]float64 {
 	return filters
 }
 
-func applyFilterBank(power []float64, filters [][]float64) []float64 {
-	energies := make([]float64, len(filters))
+func applyFilterBankInto(power []float64, filters [][]float64, energies []float64) {
 	for i, filter := range filters {
 		var sum float64
 		for bin, weight := range filter {
@@ -198,23 +206,22 @@ func applyFilterBank(power []float64, filters [][]float64) []float64 {
 		}
 		energies[i] = sum
 	}
-	return energies
 }
 
-func dct(values []float64, coeffCount int) []float64 {
-	if coeffCount > len(values) {
-		coeffCount = len(values)
+func dctInto(values, coeffs []float64) {
+	// Limit output length to len(values) to match the DCT input dimension.
+	output := coeffs
+	if len(output) > len(values) {
+		output = output[:len(values)]
 	}
-	coeffs := make([]float64, coeffCount)
 	n := float64(len(values))
-	for k := 0; k < coeffCount; k++ {
+	for k := range output {
 		var sum float64
 		for i, value := range values {
 			sum += value * math.Cos(math.Pi*float64(k)*(float64(i)+0.5)/n)
 		}
-		coeffs[k] = sum
+		output[k] = sum
 	}
-	return coeffs
 }
 
 func hzToMel(hz float64) float64 {

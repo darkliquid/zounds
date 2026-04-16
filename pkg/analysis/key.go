@@ -105,10 +105,12 @@ func computeKey(buffer zaudio.PCMBuffer) KeyStats {
 
 	fft := fourier.NewFFT(windowSize)
 	chroma := make([]float64, 12)
+	frame := make([]float64, windowSize)
+	power := make([]float64, windowSize/2+1)
 	frames := 0
 
 	for start := 0; start < len(mono); start += hopSize {
-		frame := make([]float64, windowSize)
+		clear(frame)
 		end := start + windowSize
 		if end > len(mono) {
 			end = len(mono)
@@ -117,8 +119,8 @@ func computeKey(buffer zaudio.PCMBuffer) KeyStats {
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		power := powerSpectrum(coeff)
-		accumulateChroma(chroma, power, buffer.SampleRate, fft)
+		current := powerSpectrumInto(coeff, power)
+		accumulateChroma(chroma, current, buffer.SampleRate, fft)
 		frames++
 
 		if end == len(mono) {

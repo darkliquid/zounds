@@ -120,8 +120,6 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	var ruleTagger tags.RuleTagger
 	if strings.TrimSpace(ruleFile) != "" {
 		ruleTagger, err = tags.NewRuleTaggerFromFile(ruleFile)
-	} else {
-		ruleTagger, err = tags.NewRuleTagger()
 	}
 	if err != nil {
 		return err

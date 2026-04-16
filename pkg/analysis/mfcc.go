@@ -229,7 +229,7 @@ func dct(values []float64, coeffCount int) []float64 {
 }
 
 func dctInto(values, coeffs []float64) {
-	// Use a local working view so callers keep their original coeffs slice.
+	// Use a bounded working view so writes stay within values-derived limits.
 	output := coeffs
 	if len(output) > len(values) {
 		output = output[:len(values)]

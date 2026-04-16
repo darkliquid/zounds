@@ -116,7 +116,7 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 	var (
 		frameCount   int
 		totalFlux    float64
-		havePrev     bool
+		hasPrev      bool
 		contrastSums [7]float64
 	)
 
@@ -136,7 +136,7 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 			average[i] += mag
 		}
 
-		if havePrev {
+		if hasPrev {
 			var flux float64
 			for i, mag := range current {
 				diff := mag - prev[i]
@@ -153,7 +153,7 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 		}
 
 		copy(prev, current)
-		havePrev = true
+		hasPrev = true
 		frameCount++
 		if end == len(mono) {
 			break

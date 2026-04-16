@@ -168,11 +168,6 @@ func newRuleTag(definition RuleDefinition) core.Tag {
 func defaultRuleDefinitions() []RuleDefinition {
 	return []RuleDefinition{
 		{
-			Tag:        "dark",
-			Expr:       `Metrics["spectral_centroid_hz"] > 0 && Metrics["spectral_centroid_hz"] < 1500 && Metrics["dominant_frequency_hz"] > 0 && Metrics["dominant_frequency_hz"] < 400 && Metrics["spectral_flatness"] < 0.3`,
-			Confidence: 0.72,
-		},
-		{
 			Tag:        "bell",
 			Expr:       `Metrics["dominant_frequency_hz"] > 1000 && Metrics["spectral_flatness"] < 0.2 && Metrics["sustain_ratio"] > 0.35 && Metrics["confidence"] > 0.35`,
 			Confidence: 0.68,

@@ -56,3 +56,34 @@ func TestPathTaggerSkipsGenericAndPurelyNumericTokens(t *testing.T) {
 		t.Fatalf("unexpected filtered tags %#v", got)
 	}
 }
+
+func TestPathTaggerDecodesEscapedSegmentsAndPluses(t *testing.T) {
+	t.Parallel()
+
+	tagger := tags.NewPathTagger()
+	got, err := tagger.Tags(context.Background(), core.Sample{
+		RelativePath: "Black+Octopus+Sound/Didgeridoo%20Loops/BFD_Cm_88BPM.wav",
+	}, core.AnalysisResult{})
+	if err != nil {
+		t.Fatalf("extract path tags: %v", err)
+	}
+
+	expected := map[string]struct{}{
+		"black":      {},
+		"octopus":    {},
+		"didgeridoo": {},
+		"bfd":        {},
+		"cm":         {},
+		"88bpm":      {},
+	}
+
+	if len(got) != len(expected) {
+		t.Fatalf("unexpected tag count: got=%d want=%d (%v)", len(got), len(expected), got)
+	}
+
+	for _, tag := range got {
+		if _, ok := expected[tag.NormalizedName]; !ok {
+			t.Fatalf("unexpected tag %q", tag.NormalizedName)
+		}
+	}
+}

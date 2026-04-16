@@ -2,6 +2,7 @@ package tags
 
 import (
 	"context"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -9,7 +10,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const pathTaggerVersion = "0.1.0"
+const pathTaggerVersion = "0.2.0"
 
 var ignoredPathTokens = map[string]struct{}{
 	"audio":   {},
@@ -92,6 +93,10 @@ func (PathTagger) Tags(_ context.Context, sample core.Sample, _ core.AnalysisRes
 }
 
 func tokenizePathSegment(segment string) []string {
+	segment = strings.ReplaceAll(segment, "+", " ")
+	if decoded, err := url.PathUnescape(segment); err == nil {
+		segment = decoded
+	}
 	segment = strings.Map(func(r rune) rune {
 		switch r {
 		case '_', '-', '.', '(', ')', '[', ']', '{', '}':

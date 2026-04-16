@@ -69,7 +69,7 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVar(&auto, "auto", false, "infer and attach path/metadata tags")
+	flags.BoolVar(&auto, "auto", false, "infer and attach metadata/rule tags")
 	flags.BoolVar(&list, "list", false, "list known tags and usage counts")
 	flags.StringVar(&path, "path", "", "sample path to target for add/remove or auto-tagging one file")
 	flags.StringSliceVar(&addTags, "add", nil, "manually add one or more tags")
@@ -116,7 +116,6 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	if err != nil {
 		return err
 	}
-	pathTagger := tags.NewPathTagger()
 	metadataTagger := tags.NewMetadataTagger()
 	var ruleTagger tags.RuleTagger
 	if strings.TrimSpace(ruleFile) != "" {
@@ -175,10 +174,6 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		combined := combineAnalysisResults(sample.ID, results...)
 
 		var generated []core.Tag
-		pathTags, err := pathTagger.Tags(ctx, sample, combined)
-		if err != nil {
-			return err
-		}
 		metadataTags, err := metadataTagger.Tags(ctx, sample, combined)
 		if err != nil {
 			return err
@@ -187,7 +182,6 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		if err != nil {
 			return err
 		}
-		generated = append(generated, pathTags...)
 		generated = append(generated, metadataTags...)
 		generated = append(generated, ruleTags...)
 		if clapTagger != nil {

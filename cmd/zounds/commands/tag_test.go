@@ -15,7 +15,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/db"
 )
 
-func TestTagCommandAutoAppliesPathTags(t *testing.T) {
+func TestTagCommandAutoSkipsGenericPathTags(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -55,10 +55,13 @@ func TestTagCommandAutoAppliesPathTags(t *testing.T) {
 	for _, tag := range got {
 		names[tag.NormalizedName] = struct{}{}
 	}
-	for _, expected := range []string{"drums", "dark", "impact"} {
-		if _, ok := names[expected]; !ok {
-			t.Fatalf("missing auto tag %q in %v", expected, names)
+	for _, unwanted := range []string{"drums", "impact"} {
+		if _, ok := names[unwanted]; ok {
+			t.Fatalf("unexpected generic path tag %q in %v", unwanted, names)
 		}
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected no generic path-derived tags, got %v", names)
 	}
 }
 
@@ -189,6 +192,61 @@ func TestTagCommandAutoUsesCustomRuleFile(t *testing.T) {
 	}
 	if _, ok := names["sub"]; ok {
 		t.Fatalf("expected custom rule file to replace defaults, got %v", names)
+	}
+}
+
+func TestTagCommandAutoSupportsPathBasedCustomRules(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "path-rules.db")
+	rulePath := filepath.Join(t.TempDir(), "path-rules.json")
+	samplePath := filepath.Join(root, "Black+Octopus+Sound", "Didgeridoo Loops", "loop.wav")
+	writeWAVFixture(t, samplePath)
+
+	err := os.WriteFile(rulePath, []byte(`{
+  "rules": [
+    {
+      "tag": "didgeridoo",
+      "expr": "Sample.RelativePath contains \"Didgeridoo Loops\""
+    }
+  ]
+}`), 0o644)
+	if err != nil {
+		t.Fatalf("write rule file: %v", err)
+	}
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	tagCmd := commands.NewRootCommand()
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto", "--rule-file", rulePath})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute auto tag: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	sample, err := repo.FindSampleByPath(context.Background(), samplePath)
+	if err != nil {
+		t.Fatalf("find sample: %v", err)
+	}
+	got, err := repo.ListTagsForSample(context.Background(), sample.ID)
+	if err != nil {
+		t.Fatalf("list sample tags: %v", err)
+	}
+
+	names := make(map[string]struct{}, len(got))
+	for _, tag := range got {
+		names[tag.NormalizedName] = struct{}{}
+	}
+	if _, ok := names["didgeridoo"]; !ok {
+		t.Fatalf("missing path-based custom rule tag in %v", names)
+	}
+	if _, ok := names["black"]; ok {
+		t.Fatalf("unexpected generic path tag in %v", names)
 	}
 }
 

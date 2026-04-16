@@ -10,7 +10,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/tags"
 )
 
-func TestRuleTaggerGeneratesDarkPadAndSubTags(t *testing.T) {
+func TestRuleTaggerGeneratesPadAndSubTags(t *testing.T) {
 	t.Parallel()
 
 	tagger, err := tags.NewRuleTagger()
@@ -35,7 +35,7 @@ func TestRuleTaggerGeneratesDarkPadAndSubTags(t *testing.T) {
 		t.Fatalf("rule tags: %v", err)
 	}
 
-	assertTagNames(t, got, "dark", "pad", "sub")
+	assertTagNames(t, got, "pad", "sub")
 }
 
 func TestRuleTaggerGeneratesBellGlitchAndHooverTags(t *testing.T) {

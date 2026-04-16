@@ -54,6 +54,60 @@ By default, the CLI stores its SQLite database at `$XDG_DATA_HOME/zounds/zounds.
 
 For local CLAP tagging, download `audio_model.onnx`, `text_model.onnx`, and `tokenizer.json` from [Xenova/clap-htsat-unfused](https://huggingface.co/Xenova/clap-htsat-unfused), place them in a directory such as `./models/clap`, and pass that directory with `--clap-model-dir`. You also need the ONNX Runtime shared library available on your system, or provide its path with `--clap-lib`.
 
+## Tagging rules
+
+`zounds tag --auto` can load a JSON rule file with `--rule-file`. Rules are evaluated with the [`expr`](https://expr-lang.org/) language against this environment:
+
+- `Metrics["name"]` for numeric analysis outputs such as `frequency_hz`, `spectral_flux`, `loop_confidence`, or `spectral_centroid_hz`
+- `Attributes["name"]` for string attributes such as `key`, `note_name`, `format`, or embedded metadata values
+- `Sample.Path`, `Sample.RelativePath`, `Sample.FileName`, `Sample.Extension`, `Sample.Format`, and `Sample.SizeBytes` for explicit file-aware rules
+
+Each rule defines a tag, an expression, and optional `confidence` and `source` fields:
+
+```json
+{
+  "rules": [
+    {
+      "tag": "cyberpunk",
+      "expr": "Metrics[\"spectral_flux\"] > 0.1 && Attributes[\"mode\"] == \"minor\"",
+      "confidence": 0.9
+    }
+  ]
+}
+```
+
+Use it during auto-tagging:
+
+```bash
+zounds scan ~/Samples
+zounds tag --auto --rule-file ./rules.json
+```
+
+Example rule file with both analysis-driven and path-aware tags:
+
+```json
+{
+  "rules": [
+    {
+      "tag": "sub",
+      "expr": "Metrics[\"frequency_hz\"] > 0 && Metrics[\"frequency_hz\"] < 120 && Metrics[\"confidence\"] > 0.5",
+      "confidence": 0.75
+    },
+    {
+      "tag": "didgeridoo",
+      "expr": "Sample.RelativePath contains \"Didgeridoo Loops\"",
+      "source": "rules"
+    },
+    {
+      "tag": "oneshot",
+      "expr": "\"loop_confidence\" in Metrics && Metrics[\"loop_confidence\"] < 0.35"
+    }
+  ]
+}
+```
+
+This is the recommended way to tag from folder or filename conventions. Generic path token extraction is noisy, so keep path-based tagging explicit in rules instead of relying on automatic path tokenization.
+
 ## Library layout
 
 ```text

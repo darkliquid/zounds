@@ -50,6 +50,12 @@ func TestPlayCommandDryRunResolvesTagQuery(t *testing.T) {
 		t.Fatalf("execute tag: %v", err)
 	}
 
+	manual := commands.NewRootCommand()
+	manual.SetArgs([]string{"--db", dbPath, "tag", "--add", "punch", "--path", samplePath})
+	if err := manual.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute manual tag add: %v", err)
+	}
+
 	play := commands.NewRootCommand()
 	var out bytes.Buffer
 	play.SetOut(&out)

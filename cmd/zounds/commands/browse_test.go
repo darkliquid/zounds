@@ -21,6 +21,7 @@ func TestBrowseCommandListsFilteredSamplesWithTags(t *testing.T) {
 	writeWAVFixture(t, otherPath)
 
 	scanAndAutoTagForTest(t, dbPath, root)
+	addManualTagsForTest(t, dbPath, matchPath, "dark", "glitch")
 
 	cmd := commands.NewRootCommand()
 	var out bytes.Buffer
@@ -52,6 +53,7 @@ func TestBrowseCommandDryRunPreviewResolvesFirstMatch(t *testing.T) {
 	writeWAVFixture(t, samplePath)
 
 	scanAndAutoTagForTest(t, dbPath, root)
+	addManualTagsForTest(t, dbPath, samplePath, "epic")
 
 	cmd := commands.NewRootCommand()
 	var out bytes.Buffer
@@ -82,5 +84,20 @@ func scanAndAutoTagForTest(t *testing.T, dbPath string, roots ...string) {
 	tag.SetArgs([]string{"--db", dbPath, "tag", "--auto"})
 	if err := tag.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute tag: %v", err)
+	}
+}
+
+func addManualTagsForTest(t *testing.T, dbPath, samplePath string, tags ...string) {
+	t.Helper()
+
+	args := []string{"--db", dbPath, "tag", "--path", samplePath}
+	for _, tag := range tags {
+		args = append(args, "--add", tag)
+	}
+
+	cmd := commands.NewRootCommand()
+	cmd.SetArgs(args)
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute manual tag add: %v", err)
 	}
 }

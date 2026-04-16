@@ -221,7 +221,8 @@ func magnitudeSpectrum(coeff []complex128) []float64 {
 }
 
 // magnitudeSpectrumInto writes as many bins as fit into mags and returns the
-// valid prefix containing computed magnitudes.
+// valid prefix containing computed magnitudes. The returned slice aliases mags
+// and is only valid until mags is reused.
 func magnitudeSpectrumInto(coeff []complex128, mags []float64) []float64 {
 	limit := len(coeff)/2 + 1
 	if len(mags) < limit {

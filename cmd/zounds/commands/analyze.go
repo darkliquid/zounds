@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -172,7 +173,7 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 			defer func() { <-sem }()
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					errs[index] = fmt.Errorf("%s analysis panicked: %v", analyzer.Name(), recovered)
+					errs[index] = fmt.Errorf("%s analysis panicked: %v\n%s", analyzer.Name(), recovered, debug.Stack())
 				}
 			}()
 			result, err := analyzer.Analyze(ctx, sample)

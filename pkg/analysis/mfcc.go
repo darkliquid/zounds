@@ -144,6 +144,8 @@ func powerSpectrum(coeff []complex128) []float64 {
 	return powerSpectrumInto(coeff, power)
 }
 
+// powerSpectrumInto writes as many bins as fit into power and returns the
+// valid prefix containing computed power-spectrum values.
 func powerSpectrumInto(coeff []complex128, power []float64) []float64 {
 	limit := len(coeff)/2 + 1
 	if len(power) < limit {
@@ -227,6 +229,7 @@ func dct(values []float64, coeffCount int) []float64 {
 }
 
 func dctInto(values, coeffs []float64) {
+	// Use a local working view so callers keep their original coeffs slice.
 	output := coeffs
 	if len(output) > len(values) {
 		output = output[:len(values)]

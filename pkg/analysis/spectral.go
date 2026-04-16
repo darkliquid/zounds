@@ -208,9 +208,9 @@ func applyHannWindow(frame []float64) {
 	if n <= 1 {
 		return
 	}
-	windowDenominator := float64(n - 1)
+	hannWindowDenominator := float64(n - 1)
 	for i := range frame {
-		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/windowDenominator))
+		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/hannWindowDenominator))
 	}
 }
 
@@ -220,6 +220,8 @@ func magnitudeSpectrum(coeff []complex128) []float64 {
 	return magnitudeSpectrumInto(coeff, mags)
 }
 
+// magnitudeSpectrumInto writes as many bins as fit into mags and returns the
+// valid prefix containing computed magnitudes.
 func magnitudeSpectrumInto(coeff []complex128, mags []float64) []float64 {
 	limit := len(coeff)/2 + 1
 	if len(mags) < limit {

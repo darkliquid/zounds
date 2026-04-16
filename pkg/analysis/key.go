@@ -119,8 +119,8 @@ func computeKey(buffer zaudio.PCMBuffer) KeyStats {
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		powerSpectrumInto(coeff, power)
-		accumulateChroma(chroma, power, buffer.SampleRate, fft)
+		current := powerSpectrumInto(coeff, power)
+		accumulateChroma(chroma, current, buffer.SampleRate, fft)
 		frames++
 
 		if end == len(mono) {

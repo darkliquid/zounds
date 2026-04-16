@@ -12,13 +12,13 @@ func BenchmarkFeatureVectorBuilderBuild(b *testing.B) {
 	builder := NewFeatureVectorBuilder(nil)
 	results := []core.AnalysisResult{
 		{Metrics: map[string]float64{
-			"sample_rate":          44100,
-			"channels":             2,
-			"duration_seconds":     1.25,
-			"spectral_centroid_hz": 1250,
-			"spectral_rolloff_hz":  4100,
-			"spectral_flux":        0.14,
-			"zero_crossing_rate":   0.08,
+			"sample_rate":           44100,
+			"channels":              2,
+			"duration_seconds":      1.25,
+			"spectral_centroid_hz":  1250,
+			"spectral_rolloff_hz":   4100,
+			"spectral_flux":         0.14,
+			"zero_crossing_rate":    0.08,
 			"dominant_frequency_hz": 440,
 			"peak":                  0.98,
 			"rms":                   0.35,

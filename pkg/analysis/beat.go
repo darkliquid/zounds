@@ -147,18 +147,18 @@ func onsetEnvelope(samples []float64, windowSize, hopSize int) []float64 {
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		magnitudeSpectrumInto(coeff, mags)
+		current := magnitudeSpectrumInto(coeff, mags)
 		if havePrev {
 			var flux float64
-			for i := range mags {
-				diff := mags[i] - maxFilteredReference(prev, i)
+			for i := range current {
+				diff := current[i] - maxFilteredReference(prev, i)
 				if diff > 0 {
 					flux += diff
 				}
 			}
-			envelope = append(envelope, flux/float64(len(mags)))
+			envelope = append(envelope, flux/float64(len(current)))
 		}
-		copy(prev, mags)
+		copy(prev, current)
 		havePrev = true
 
 		if end == len(samples) {

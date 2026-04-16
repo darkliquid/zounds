@@ -107,8 +107,8 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		powerSpectrumInto(coeff, power)
-		applyFilterBankInto(power, filterBank, energies)
+		current := powerSpectrumInto(coeff, power)
+		applyFilterBankInto(current, filterBank, energies)
 		for i, energy := range energies {
 			if energy <= 1e-12 {
 				energy = 1e-12
@@ -141,11 +141,10 @@ func computeMFCC(buffer zaudio.PCMBuffer, coeffCount, filterCount int) []float64
 func powerSpectrum(coeff []complex128) []float64 {
 	limit := len(coeff)/2 + 1
 	power := make([]float64, limit)
-	powerSpectrumInto(coeff, power)
-	return power
+	return powerSpectrumInto(coeff, power)
 }
 
-func powerSpectrumInto(coeff []complex128, power []float64) {
+func powerSpectrumInto(coeff []complex128, power []float64) []float64 {
 	limit := len(coeff)/2 + 1
 	if len(power) < limit {
 		limit = len(power)
@@ -155,6 +154,7 @@ func powerSpectrumInto(coeff []complex128, power []float64) {
 		imagPart := imag(coeff[i])
 		power[i] = realPart*realPart + imagPart*imagPart
 	}
+	return power[:limit]
 }
 
 func melFilterBank(filterCount, fftSize, sampleRate int) [][]float64 {

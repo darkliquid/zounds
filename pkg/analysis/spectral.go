@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"sync"
 	"time"
 
 	"gonum.org/v1/gonum/dsp/fourier"
@@ -131,29 +130,29 @@ func computeSpectral(buffer zaudio.PCMBuffer) SpectralStats {
 		applyHannWindow(frame)
 
 		coeff := fft.Coefficients(nil, frame)
-		magnitudeSpectrumInto(coeff, mags)
+		current := magnitudeSpectrumInto(coeff, mags)
 
-		for i, mag := range mags {
+		for i, mag := range current {
 			average[i] += mag
 		}
 
 		if havePrev {
 			var flux float64
-			for i, mag := range mags {
+			for i, mag := range current {
 				diff := mag - prev[i]
 				if diff > 0 {
 					flux += diff
 				}
 			}
-			totalFlux += flux / float64(len(mags))
+			totalFlux += flux / float64(len(current))
 		}
 
-		contrast := spectralContrast(mags, buffer.SampleRate, fft, len(contrastSums))
+		contrast := spectralContrast(current, buffer.SampleRate, fft, len(contrastSums))
 		for i := range contrastSums {
 			contrastSums[i] += contrast[i]
 		}
 
-		copy(prev, mags)
+		copy(prev, current)
 		havePrev = true
 		frameCount++
 		if end == len(mono) {
@@ -209,20 +208,19 @@ func applyHannWindow(frame []float64) {
 	if n <= 1 {
 		return
 	}
-	window := hannWindow(n)
+	denom := float64(n - 1)
 	for i := range frame {
-		frame[i] *= window[i]
+		frame[i] *= 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/denom))
 	}
 }
 
 func magnitudeSpectrum(coeff []complex128) []float64 {
 	limit := len(coeff)/2 + 1
 	mags := make([]float64, limit)
-	magnitudeSpectrumInto(coeff, mags)
-	return mags
+	return magnitudeSpectrumInto(coeff, mags)
 }
 
-func magnitudeSpectrumInto(coeff []complex128, mags []float64) {
+func magnitudeSpectrumInto(coeff []complex128, mags []float64) []float64 {
 	limit := len(coeff)/2 + 1
 	if len(mags) < limit {
 		limit = len(mags)
@@ -230,21 +228,7 @@ func magnitudeSpectrumInto(coeff []complex128, mags []float64) {
 	for i := 0; i < limit; i++ {
 		mags[i] = cmplxAbs(coeff[i])
 	}
-}
-
-var hannWindowCache sync.Map
-
-func hannWindow(size int) []float64 {
-	if cached, ok := hannWindowCache.Load(size); ok {
-		return cached.([]float64)
-	}
-	window := make([]float64, size)
-	denom := float64(size - 1)
-	for i := range window {
-		window[i] = 0.5 * (1 - math.Cos((2*math.Pi*float64(i))/denom))
-	}
-	hannWindowCache.Store(size, window)
-	return window
+	return mags[:limit]
 }
 
 func spectralCentroid(mags []float64, sampleRate int, fft *fourier.FFT) float64 {

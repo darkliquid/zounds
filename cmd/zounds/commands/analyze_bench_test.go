@@ -17,12 +17,16 @@ func BenchmarkAnalyzeSampleEndToEnd(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.wav")
 	buffer := benchmarkAudioBuffer(44100, 440, 880)
 	writeBenchmarkWAV(b, path, buffer)
+	info, err := os.Stat(path)
+	if err != nil {
+		b.Fatalf("stat wav fixture: %v", err)
+	}
 	sample := core.Sample{
 		ID:        1,
 		Path:      path,
 		Extension: "wav",
 		Format:    core.FormatWAV,
-		SizeBytes: int64(len(buffer.Data) * 2),
+		SizeBytes: info.Size(),
 	}
 	builder := analysis.NewFeatureVectorBuilder(nil)
 	ctx := context.Background()

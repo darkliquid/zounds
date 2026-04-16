@@ -43,10 +43,11 @@ func decodeSample(ctx context.Context, registry *zaudio.Registry, sample core.Sa
 	if registry == nil {
 		return zaudio.DecodeResult{}, fmt.Errorf("analyzer is not initialized")
 	}
-	if ctx != nil {
-		if value, ok := ctx.Value(decodedSampleContextKey{}).(decodedSampleContextValue); ok && value.path == sample.Path {
-			return value.decoded, nil
-		}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if value, ok := ctx.Value(decodedSampleContextKey{}).(decodedSampleContextValue); ok && value.path == sample.Path {
+		return value.decoded, nil
 	}
 
 	decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)

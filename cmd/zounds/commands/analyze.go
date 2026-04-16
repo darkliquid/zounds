@@ -118,6 +118,10 @@ func selectSamplesForAnalysis(ctx context.Context, repo *db.Repository, all bool
 }
 
 func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.FeatureVectorBuilder) ([]core.AnalysisResult, core.FeatureVector, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	registry, err := codecs.NewRegistry()
 	if err != nil {
 		return nil, core.FeatureVector{}, fmt.Errorf("create codec registry: %w", err)
@@ -154,9 +158,23 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 		analyzers = append(analyzers, analyzer)
 	}
 
+	results, err := runAnalyzers(ctx, sample, analyzers, runtime.GOMAXPROCS(0))
+	if err != nil {
+		return nil, core.FeatureVector{}, err
+	}
+
+	vector, err := builder.Build(sample.ID, results...)
+	if err != nil {
+		return nil, core.FeatureVector{}, err
+	}
+
+	return results, vector, nil
+}
+
+func runAnalyzers(ctx context.Context, sample core.Sample, analyzers []core.Analyzer, workers int) ([]core.AnalysisResult, error) {
 	results := make([]core.AnalysisResult, len(analyzers))
 	errs := make([]error, len(analyzers))
-	workers := runtime.GOMAXPROCS(0)
+
 	if workers < 1 {
 		workers = 1
 	}
@@ -187,16 +205,10 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {
-			return nil, core.FeatureVector{}, err
+			return nil, err
 		}
 	}
-
-	vector, err := builder.Build(sample.ID, results...)
-	if err != nil {
-		return nil, core.FeatureVector{}, err
-	}
-
-	return results, vector, nil
+	return results, nil
 }
 
 func analyzeFileInfo(ctx context.Context, path string) (map[string]any, error) {

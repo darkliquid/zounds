@@ -92,9 +92,10 @@ func computeHPSSStats(buffer zaudio.PCMBuffer) HPSSStats {
 
 	fft := fourier.NewFFT(windowSize)
 	spectrogram := make([][]float64, 0, len(mono)/hopSize+1)
+	frame := make([]float64, windowSize)
 
 	for start := 0; start < len(mono); start += hopSize {
-		frame := make([]float64, windowSize)
+		clear(frame)
 		end := start + windowSize
 		if end > len(mono) {
 			end = len(mono)

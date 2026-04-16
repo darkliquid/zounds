@@ -52,6 +52,78 @@ func BenchmarkComputePerceptualHash(b *testing.B) {
 	}
 }
 
+func BenchmarkAnalysisHotPathPipeline(b *testing.B) {
+	buffer := benchmarkPCMBuffer(44100, 440, 880)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeSpectral(buffer)
+		_ = computeBeatStats(buffer)
+		_ = computeKey(buffer)
+		_ = computeMFCC(buffer, 13, 26)
+		_ = computeHPSSStats(buffer)
+	}
+}
+
+func BenchmarkComputeSpectral(b *testing.B) {
+	buffer := benchmarkPCMBuffer(44100, 440, 880)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeSpectral(buffer)
+	}
+}
+
+func BenchmarkComputeBeatStats(b *testing.B) {
+	buffer := benchmarkPCMBuffer(44100, 440, 880)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeBeatStats(buffer)
+	}
+}
+
+func BenchmarkComputeKey(b *testing.B) {
+	buffer := benchmarkPCMBuffer(44100, 440, 880)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeKey(buffer)
+	}
+}
+
+func BenchmarkComputeMFCC(b *testing.B) {
+	buffer := benchmarkPCMBuffer(44100, 440, 880)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeMFCC(buffer, 13, 26)
+	}
+}
+
+func BenchmarkComputeHPSSStats(b *testing.B) {
+	buffer := benchmarkPCMBuffer(44100, 440, 880)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = computeHPSSStats(buffer)
+	}
+}
+
+func benchmarkPCMBuffer(sampleRate int, frequencies ...int) zaudio.PCMBuffer {
+	total := sampleRate
+	out := make([]float64, total*2)
+	for i := 0; i < total; i++ {
+		var value float64
+		for _, frequency := range frequencies {
+			value += 0.25 * math.Sin(2*math.Pi*float64(frequency)*float64(i)/float64(sampleRate))
+		}
+		out[i*2] = value
+		out[i*2+1] = value
+	}
+	return zaudio.PCMBuffer{
+		SampleRate: sampleRate,
+		Channels:   2,
+		BitDepth:   16,
+		Data:       out,
+	}
+}
+
 func benchmarkSine(sampleRate, frequency int) []float64 {
 	total := sampleRate
 	out := make([]float64, total*2)

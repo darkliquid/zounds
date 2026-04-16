@@ -90,12 +90,13 @@ func computeSpliceStats(buffer zaudio.PCMBuffer) SpliceStats {
 	}
 
 	fft := fourier.NewFFT(windowSize)
+	frame := make([]float64, windowSize)
 	var (
 		prev      []float64
 		strengths []float64
 	)
 	for start := 0; start < len(mono); start += hopSize {
-		frame := make([]float64, windowSize)
+		clear(frame)
 		end := minInt(len(mono), start+windowSize)
 		copy(frame, mono[start:end])
 		applyHannWindow(frame)

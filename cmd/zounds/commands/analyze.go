@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"sync"
 
 	"github.com/spf13/cobra"
 
 	"github.com/darkliquid/zounds/pkg/analysis"
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/audio/codecs"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
 )
@@ -113,22 +117,32 @@ func selectSamplesForAnalysis(ctx context.Context, repo *db.Repository, all bool
 }
 
 func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.FeatureVectorBuilder) ([]core.AnalysisResult, core.FeatureVector, error) {
+	registry, err := codecs.NewRegistry()
+	if err != nil {
+		return nil, core.FeatureVector{}, fmt.Errorf("create codec registry: %w", err)
+	}
+	decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)
+	if err != nil {
+		return nil, core.FeatureVector{}, fmt.Errorf("decode sample %q: %w", sample.Path, err)
+	}
+	ctx = analysis.ContextWithDecodedSample(ctx, sample.Path, decoded)
+
 	analyzers := []core.Analyzer{}
 	factory := []func() (core.Analyzer, error){
-		func() (core.Analyzer, error) { return analysis.NewMetadataAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewSpectralAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewKeyAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewBeatAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewPitchAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewLoudnessAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewDynamicsAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewHPSSAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewQualityAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewHarmonicsAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewFormantAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewSpliceAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(nil) },
-		func() (core.Analyzer, error) { return analysis.NewLoopAnalyzer(nil) },
+		func() (core.Analyzer, error) { return analysis.NewMetadataAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewSpectralAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewKeyAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewBeatAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewPitchAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewLoudnessAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewDynamicsAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewHPSSAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewQualityAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewHarmonicsAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewFormantAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewSpliceAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewLoopAnalyzer(registry) },
 	}
 
 	for _, create := range factory {
@@ -139,13 +153,36 @@ func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.Fe
 		analyzers = append(analyzers, analyzer)
 	}
 
-	results := make([]core.AnalysisResult, 0, len(analyzers))
-	for _, analyzer := range analyzers {
-		result, err := analyzer.Analyze(ctx, sample)
+	results := make([]core.AnalysisResult, len(analyzers))
+	errs := make([]error, len(analyzers))
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(analyzers) {
+		workers = len(analyzers)
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i, analyzer := range analyzers {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(index int, analyzer core.Analyzer) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			result, err := analyzer.Analyze(ctx, sample)
+			if err != nil {
+				errs[index] = fmt.Errorf("%s analysis failed: %w", analyzer.Name(), err)
+				return
+			}
+			results[index] = result
+		}(i, analyzer)
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
-			return nil, core.FeatureVector{}, fmt.Errorf("%s analysis failed: %w", analyzer.Name(), err)
+			return nil, core.FeatureVector{}, err
 		}
-		results = append(results, result)
 	}
 
 	vector, err := builder.Build(sample.ID, results...)

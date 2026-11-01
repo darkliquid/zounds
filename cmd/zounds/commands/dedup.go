@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -59,7 +60,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 				}
 				actions = dedup.PlanCull(groups, keepStrategy)
 			} else {
-				hashes, err := buildPerceptualHashes(ctx, samples, cmd.ErrOrStderr(), logger)
+				hashes, err := buildPerceptualHashes(ctx, samples, cmd.ErrOrStderr(), logger, cfg.Concurrency)
 				if err != nil {
 					return err
 				}
@@ -95,27 +96,69 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func buildPerceptualHashes(ctx context.Context, samples []core.Sample, errOut io.Writer, logger *log.Logger) ([]dedup.PerceptualHash, error) {
+func buildPerceptualHashes(ctx context.Context, samples []core.Sample, errOut io.Writer, logger *log.Logger, concurrency int) ([]dedup.PerceptualHash, error) {
 	analyzer, err := analysis.NewPerceptualHashAnalyzer(nil)
 	if err != nil {
 		return nil, err
 	}
 
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(samples) {
+		concurrency = len(samples)
+	}
+
 	hashes := make([]dedup.PerceptualHash, 0, len(samples))
-	for _, sample := range samples {
-		verbosef(logger, "building perceptual hash for %s", sample.Path)
-		result, err := analyzer.Analyze(ctx, sample)
-		if err != nil {
-			if zaudio.IsDecodeError(err) {
-				_, _ = fmt.Fprintf(errOut, "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
-				continue
-			}
-			return nil, err
+	var (
+		mu       sync.Mutex
+		firstErr error
+		errMu    sync.Mutex
+	)
+
+	setErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
 		}
-		hashes = append(hashes, dedup.PerceptualHash{
-			Sample: sample,
-			Hash:   result.Attributes["perceptual_hash"],
-		})
+		errMu.Unlock()
+	}
+
+	jobs := make(chan core.Sample)
+	var wg sync.WaitGroup
+	for range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sample := range jobs {
+				verbosef(logger, "building perceptual hash for %s", sample.Path)
+				result, err := analyzer.Analyze(ctx, sample)
+				if err != nil {
+					if zaudio.IsDecodeError(err) {
+						_, _ = fmt.Fprintf(errOut, "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
+						continue
+					}
+					setErr(err)
+					return
+				}
+				mu.Lock()
+				hashes = append(hashes, dedup.PerceptualHash{
+					Sample: sample,
+					Hash:   result.Attributes["perceptual_hash"],
+				})
+				mu.Unlock()
+			}
+		}()
+	}
+
+	for _, sample := range samples {
+		jobs <- sample
+	}
+	close(jobs)
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
 	}
 
 	return hashes, nil

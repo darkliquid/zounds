@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/darkliquid/zounds/pkg/analysis"
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
@@ -26,6 +27,11 @@ type AutoTagOptions struct {
 	// OnSkip receives samples that were skipped due to decode errors when
 	// SkipUndecodable is set.
 	OnSkip func(sample core.Sample, err error)
+	// Concurrency sets how many samples are tagged in parallel (<= 0 means
+	// 1, sequential processing). When CLAP tagging is enabled the run falls
+	// back to sequential processing because the CLAP tagger is not
+	// concurrency-safe.
+	Concurrency int
 
 	// RuleFile is an optional path to a JSON rule config for the expr-based
 	// rule tagger. Empty means no rule tagging.
@@ -93,7 +99,8 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 		}
 		taggers = append(taggers, ruleTagger)
 	}
-	if strings.TrimSpace(opts.CLAPModelDir) != "" {
+	clapEnabled := strings.TrimSpace(opts.CLAPModelDir) != ""
+	if clapEnabled {
 		clapTagger, err := tags.NewLocalCLAPTagger(opts.CLAPModelDir, opts.CLAPLib, opts.CLAPLabels, opts.CLAPMinScore, opts.CLAPMaxPredicted)
 		if err != nil {
 			return AutoTagSummary{}, fmt.Errorf("initialise CLAP tagger: %w", err)
@@ -102,28 +109,57 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 		taggers = append(taggers, clapTagger)
 	}
 
-	var summary AutoTagSummary
-	for _, sample := range samples {
+	concurrency := opts.Concurrency
+	if clapEnabled {
+		concurrency = 1
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(samples) {
+		concurrency = len(samples)
+	}
+
+	var (
+		summary  AutoTagSummary
+		summaryMu sync.Mutex
+		firstErr error
+		errMu    sync.Mutex
+	)
+
+	setErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
+	tagSample := func(sample core.Sample) {
 		verbosef(opts.Logger, "tagging sample %s", sample.Path)
 
 		decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)
 		if err != nil {
 			if opts.SkipUndecodable && zaudio.IsDecodeError(err) {
+				summaryMu.Lock()
 				summary.Skipped++
+				summaryMu.Unlock()
 				if opts.OnSkip != nil {
 					opts.OnSkip(sample, err)
 				}
-				continue
+				return
 			}
-			return summary, err
+			setErr(fmt.Errorf("decode sample %q: %w", sample.Path, err))
+			return
 		}
 		sampleCtx := analysis.ContextWithDecodedSample(ctx, sample.Path, decoded)
 
 		results := make([]core.AnalysisResult, 0, len(analyzers))
 		for _, analyzer := range analyzers {
-			result, analyzeErr := analyzer.Analyze(ctx, sample)
+			result, analyzeErr := analyzer.Analyze(sampleCtx, sample)
 			if analyzeErr != nil {
-				return summary, analyzeErr
+				setErr(analyzeErr)
+				return
 			}
 			results = append(results, result)
 		}
@@ -133,34 +169,71 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 		for _, tagger := range taggers {
 			emitted, err := tagger.Tags(sampleCtx, sample, combined)
 			if err != nil {
-				return summary, err
+				setErr(err)
+				return
 			}
 			generated = append(generated, emitted...)
 		}
 		generated = DedupeGeneratedTags(generated)
 		verbosef(opts.Logger, "generated %d tags for %s: %s", len(generated), sample.Path, strings.Join(TagNames(generated), ", "))
-		summary.Processed++
 
 		if opts.DryRun {
+			summaryMu.Lock()
+			summary.Processed++
 			summary.Applied += len(generated)
+			summaryMu.Unlock()
 			verbosef(opts.Logger, "skipping tag persistence for %s (dry run)", sample.Path)
-			continue
+			return
 		}
 
+		applied := 0
 		for _, tag := range generated {
 			verbosef(opts.Logger, "attaching tag %s to %s", NormalizedTagName(tag), sample.Path)
 			tagID, err := repo.EnsureTag(ctx, tag)
 			if err != nil {
-				return summary, err
+				setErr(err)
+				return
 			}
 			if err := repo.AttachTagToSample(ctx, sample.ID, tagID, tag.Source, tag.Confidence); err != nil {
-				return summary, err
+				setErr(err)
+				return
 			}
-			summary.Applied++
+			applied++
 		}
+
+		summaryMu.Lock()
+		summary.Processed++
+		summary.Applied += applied
+		summaryMu.Unlock()
 	}
 
-	return summary, nil
+	jobs := make(chan core.Sample)
+	var wg sync.WaitGroup
+	for range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sample := range jobs {
+				if func() bool {
+					errMu.Lock()
+					stopped := firstErr != nil
+					errMu.Unlock()
+					return stopped
+				}() {
+					continue
+				}
+				tagSample(sample)
+			}
+		}()
+	}
+
+	for _, sample := range samples {
+		jobs <- sample
+	}
+	close(jobs)
+	wg.Wait()
+
+	return summary, firstErr
 }
 
 // NormalizedTagName returns the tag's normalized name, normalizing the raw

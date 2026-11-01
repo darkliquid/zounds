@@ -30,12 +30,19 @@ type AnalyzeOptions struct {
 	// OnSkip receives samples that were skipped due to decode errors when
 	// SkipUndecodable is set.
 	OnSkip func(sample core.Sample, err error)
+	// SkipUnchanged skips samples whose stored analysis already matches the
+	// current file modification time.
+	SkipUnchanged bool
+	// OnUnchanged receives samples skipped because their analysis is current
+	// when SkipUnchanged is set.
+	OnUnchanged func(sample core.Sample)
 }
 
 // AnalyzeSummary reports the outcome of a batch analysis run.
 type AnalyzeSummary struct {
 	Processed int
 	Skipped   int
+	Unchanged int
 }
 
 // AnalyzeSamples runs the analyzer suite over samples, persisting the
@@ -45,6 +52,52 @@ func AnalyzeSamples(ctx context.Context, repo *db.Repository, samples []core.Sam
 		return AnalyzeSummary{}, errors.New("pipeline: nil repository")
 	}
 
+	unchanged := 0
+	if opts.SkipUnchanged {
+		var filtered []core.Sample
+		for _, sample := range samples {
+			current, err := analysisIsCurrent(ctx, repo, sample)
+			if err != nil {
+				return AnalyzeSummary{}, err
+			}
+			if current {
+				unchanged++
+				verbosef(opts.Logger, "skipping unchanged sample %s", sample.Path)
+				if opts.OnUnchanged != nil {
+					opts.OnUnchanged(sample)
+				}
+				continue
+			}
+			filtered = append(filtered, sample)
+		}
+		samples = filtered
+	}
+
+	summary, err := analyzeSamplesWorkerPool(ctx, repo, samples, opts)
+	summary.Unchanged = unchanged
+	return summary, err
+}
+
+// analysisIsCurrent reports whether the stored analysis row matches the
+// sample's current file modification time. Samples without a recorded
+// modification time are never treated as unchanged.
+func analysisIsCurrent(ctx context.Context, repo *db.Repository, sample core.Sample) (bool, error) {
+	if sample.ModifiedAt.IsZero() {
+		return false, nil
+	}
+
+	stored, err := repo.GetSampleAnalysis(ctx, sample.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return stored.AnalyzedModifiedAt.Equal(sample.ModifiedAt), nil
+}
+
+func analyzeSamplesWorkerPool(ctx context.Context, repo *db.Repository, samples []core.Sample, opts AnalyzeOptions) (AnalyzeSummary, error) {
 	concurrency := opts.Concurrency
 	if concurrency < 1 {
 		concurrency = 1
@@ -125,7 +178,7 @@ func PersistAnalysisOutput(ctx context.Context, repo *db.Repository, sample core
 	}
 
 	combined := CombineAnalysisResults(sample.ID, output.Results...)
-	if err := repo.UpsertSampleAnalysis(ctx, SampleAnalysisFromResult(combined)); err != nil {
+	if err := repo.UpsertSampleAnalysis(ctx, SampleAnalysisFromResult(combined, sample.ModifiedAt)); err != nil {
 		return err
 	}
 

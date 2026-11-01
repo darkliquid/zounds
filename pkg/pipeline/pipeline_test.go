@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
@@ -234,7 +235,7 @@ func TestSampleAnalysisFromResultMapsKnownFields(t *testing.T) {
 		},
 	}
 
-	mapped := pipeline.SampleAnalysisFromResult(result)
+	mapped := pipeline.SampleAnalysisFromResult(result, time.Now())
 	if mapped.DurationSeconds == nil || *mapped.DurationSeconds != 1.5 {
 		t.Fatalf("duration not mapped: %+v", mapped.DurationSeconds)
 	}
@@ -346,4 +347,110 @@ func TestClusterPersistsKMeansResult(t *testing.T) {
 
 func sampleName(i int) string {
 	return string(rune('a' + i))
+}
+
+func TestAnalyzeSamplesSkipsUnchangedSamples(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := openTestRepo(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "tone.wav")
+	writeBenchmarkWAV(t, path, benchmarkAudioBuffer(22050, 440))
+
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat fixture: %v", err)
+	}
+	sampleID, err := repo.UpsertSample(ctx, core.Sample{
+		SourceRoot:   root,
+		Path:         path,
+		RelativePath: "tone.wav",
+		FileName:     "tone.wav",
+		Extension:    "wav",
+		Format:       core.FormatWAV,
+		SizeBytes:    1024,
+		ModifiedAt:   stat.ModTime(),
+	})
+	if err != nil {
+		t.Fatalf("upsert sample: %v", err)
+	}
+	sample, err := repo.FindSampleByID(ctx, sampleID)
+	if err != nil {
+		t.Fatalf("find sample: %v", err)
+	}
+
+	first, err := pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample}, pipeline.AnalyzeOptions{SkipUnchanged: true})
+	if err != nil {
+		t.Fatalf("first analyze: %v", err)
+	}
+	if first.Processed != 1 || first.Unchanged != 0 {
+		t.Fatalf("first run should analyze: %+v", first)
+	}
+
+	second, err := pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample}, pipeline.AnalyzeOptions{SkipUnchanged: true})
+	if err != nil {
+		t.Fatalf("second analyze: %v", err)
+	}
+	if second.Processed != 0 || second.Unchanged != 1 {
+		t.Fatalf("second run should skip unchanged sample: %+v", second)
+	}
+
+	future := stat.ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("touch fixture mtime: %v", err)
+	}
+	sample.ModifiedAt = future
+
+	third, err := pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample}, pipeline.AnalyzeOptions{SkipUnchanged: true})
+	if err != nil {
+		t.Fatalf("third analyze: %v", err)
+	}
+	if third.Processed != 1 || third.Unchanged != 0 {
+		t.Fatalf("modified sample must be re-analyzed: %+v", third)
+	}
+}
+
+func TestAutoTagRunsConcurrently(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := openTestRepo(t)
+	root := t.TempDir()
+
+	rulePath := filepath.Join(t.TempDir(), "rules.json")
+	rules := `{
+  "rules": [
+    {"tag": "deep", "expr": "Metrics[\"frequency_hz\"] < 120 && Metrics[\"confidence\"] > 0.5", "confidence": 0.9}
+  ]
+}`
+	if err := os.WriteFile(rulePath, []byte(rules), 0o644); err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+
+	var samples []core.Sample
+	for i := 0; i < 4; i++ {
+		samples = append(samples, indexWAV(t, repo, root, sampleName(i)+".wav", 60))
+	}
+
+	summary, err := pipeline.AutoTag(ctx, repo, samples, pipeline.AutoTagOptions{
+		RuleFile:    rulePath,
+		Concurrency: 4,
+	})
+	if err != nil {
+		t.Fatalf("AutoTag: %v", err)
+	}
+	if summary.Processed != 4 {
+		t.Fatalf("expected 4 processed, got %+v", summary)
+	}
+
+	for _, sample := range samples {
+		tags, err := repo.ListTagsForSample(ctx, sample.ID)
+		if err != nil {
+			t.Fatalf("list tags for %s: %v", sample.Path, err)
+		}
+		if len(tags) != 1 || tags[0].NormalizedName != "deep" {
+			t.Fatalf("expected rule tag on %s, got %+v", sample.Path, tags)
+		}
+	}
 }

@@ -91,6 +91,7 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 	summary, err := pipeline.AutoTag(ctx, repo, samples, pipeline.AutoTagOptions{
 		DryRun:          cfg.DryRun,
 		SkipUndecodable: strings.TrimSpace(targetPath) == "",
+		Concurrency:     cfg.Concurrency,
 		Logger:          newVerboseLogger(cfg, cmd.ErrOrStderr()),
 		OnSkip: func(sample core.Sample, err error) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)

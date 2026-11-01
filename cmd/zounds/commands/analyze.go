@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -14,6 +15,7 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 	var (
 		analyzeAll bool
 		id         int64
+		force      bool
 	)
 
 	cmd := &cobra.Command{
@@ -39,6 +41,8 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 			summary, err := pipeline.AnalyzeSamples(ctx, repo, samples, pipeline.AnalyzeOptions{
 				DryRun:          cfg.DryRun,
 				SkipUndecodable: analyzeAll,
+				SkipUnchanged:   analyzeAll && !force,
+				Concurrency:     cfg.Concurrency,
 				Logger:          newVerboseLogger(cfg, cmd.ErrOrStderr()),
 				OnSkip: func(sample core.Sample, err error) {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
@@ -48,14 +52,22 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 				return err
 			}
 
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "analyzed %d samples\n", summary.Processed)
-			return err
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "analyzed %d samples", summary.Processed)
+			if err != nil {
+				return err
+			}
+			if summary.Unchanged > 0 {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), " (%d unchanged, skipped)", summary.Unchanged)
+			}
+			_, printErr := fmt.Fprintln(cmd.OutOrStdout())
+			return errors.Join(err, printErr)
 		},
 	}
 
 	flags := cmd.Flags()
 	flags.BoolVar(&analyzeAll, "all", false, "analyze all indexed samples")
 	flags.Int64Var(&id, "id", 0, "analyze a specific sample by id")
+	flags.BoolVar(&force, "force", false, "re-analyze samples even when the stored analysis matches the current file mtime")
 
 	return cmd
 }

@@ -444,16 +444,21 @@ func (s *Server) findClusterByID(ctx context.Context, id int64) (core.Cluster, [
 }
 
 func ListenAndServe(ctx context.Context, addr string, repo *db.Repository, logger *log.Logger) error {
-	server, err := NewServer(repo)
-	if err != nil {
-		return err
-	}
-
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = listener.Close() }()
+
+	return Serve(ctx, listener, repo, logger)
+}
+
+// Serve serves HTTP requests on the given listener until ctx is cancelled.
+func Serve(ctx context.Context, listener net.Listener, repo *db.Repository, logger *log.Logger) error {
+	server, err := NewServer(repo)
+	if err != nil {
+		return err
+	}
 
 	handler := server.Handler()
 	if logger != nil {

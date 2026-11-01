@@ -280,19 +280,24 @@ func TestListenAndServeVerboseLogsBindAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve port: %v", err)
 	}
+	defer func() { _ = listener.Close() }()
 	addr := listener.Addr().String()
-	_ = listener.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- web.ListenAndServe(ctx, addr, repo, logger)
+		errCh <- web.Serve(ctx, listener, repo, logger)
 	}()
 
 	var healthErr error
 	for range 50 {
+		select {
+		case err := <-errCh:
+			t.Fatalf("Serve exited early with: %v", err)
+		default:
+		}
 		resp, err := http.Get("http://" + addr + "/api/health")
 		if err == nil {
 			_ = resp.Body.Close()

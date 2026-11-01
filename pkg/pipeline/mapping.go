@@ -2,14 +2,17 @@ package pipeline
 
 import (
 	"math"
+	"time"
 
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
 // SampleAnalysisFromResult maps a combined AnalysisResult (flattened metrics
 // and merged attributes) onto the indexed sample_analyses schema fields.
+// analyzedModifiedAt records the file modification time the analysis ran
+// against so incremental re-runs can skip unchanged files.
 // Unknown metrics and attributes are preserved verbatim in the JSON columns.
-func SampleAnalysisFromResult(result core.AnalysisResult) core.SampleAnalysis {
+func SampleAnalysisFromResult(result core.AnalysisResult, analyzedModifiedAt time.Time) core.SampleAnalysis {
 	analysis := core.SampleAnalysis{
 		SampleID:   result.SampleID,
 		Metrics:    result.Metrics,
@@ -35,7 +38,7 @@ func SampleAnalysisFromResult(result core.AnalysisResult) core.SampleAnalysis {
 	analysis.LoopConfidence = metricPtr(result.Metrics, "loop_confidence")
 	analysis.LUFSIntegrated = metricPtr(result.Metrics, "integrated_lufs")
 	analysis.TruePeakDBTP = metricPtr(result.Metrics, "true_peak_dbtp")
-	analysis.AnalyzedModifiedAt = result.CompletedAt
+	analysis.AnalyzedModifiedAt = analyzedModifiedAt
 
 	return analysis
 }

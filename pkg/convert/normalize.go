@@ -37,8 +37,10 @@ func Normalize(buffer zaudio.PCMBuffer, opts NormalizeOptions) (zaudio.PCMBuffer
 	switch mode {
 	case NormalizePeak:
 		currentDBFS = stats.peakDBFS
-	case NormalizeRMS, NormalizeLUFS:
+	case NormalizeRMS:
 		currentDBFS = stats.rmsDBFS
+	case NormalizeLUFS:
+		currentDBFS = stats.lufs
 	default:
 		return zaudio.PCMBuffer{}, fmt.Errorf("normalize: unsupported mode %q", mode)
 	}
@@ -71,6 +73,7 @@ type levelStats struct {
 	peak     float64
 	peakDBFS float64
 	rmsDBFS  float64
+	lufs     float64
 }
 
 func measureLevel(buffer zaudio.PCMBuffer) levelStats {
@@ -86,11 +89,13 @@ func measureLevel(buffer zaudio.PCMBuffer) levelStats {
 	}
 
 	rms := math.Sqrt(sumSq / float64(len(buffer.Data)))
+	lufs := zaudio.MeasureLUFS(buffer)
 
 	return levelStats{
 		peak:     peak,
 		peakDBFS: linearToDBFS(peak),
 		rmsDBFS:  linearToDBFS(rms),
+		lufs:     lufs,
 	}
 }
 

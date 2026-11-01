@@ -84,3 +84,44 @@ func TestNormalizeRejectsClippingByDefault(t *testing.T) {
 		t.Fatal("expected clipping error")
 	}
 }
+
+func TestNormalizeLUFSTargetsRequestedLUFS(t *testing.T) {
+	t.Parallel()
+
+	sampleRate := 48000
+	duration := 2.0
+	frames := int(duration * float64(sampleRate))
+	data := make([]float64, frames*2) // Stereo
+
+	// 1 kHz sine wave at -10 dBFS peak (~0.3162)
+	peak := math.Pow(10, -10.0/20.0)
+	for i := 0; i < frames; i++ {
+		val := peak * math.Sin(2*math.Pi*1000.0*float64(i)/float64(sampleRate))
+		data[i*2] = val
+		data[i*2+1] = val
+	}
+
+	buffer := zaudio.PCMBuffer{
+		SampleRate: sampleRate,
+		Channels:   2,
+		BitDepth:   16,
+		Data:       data,
+	}
+
+	initialLUFS := zaudio.MeasureLUFS(buffer)
+
+	targetLUFS := -14.0
+	normalized, err := convert.Normalize(buffer, convert.NormalizeOptions{
+		Mode:          convert.NormalizeLUFS,
+		TargetDBFS:    targetLUFS,
+		AllowClipping: false,
+	})
+	if err != nil {
+		t.Fatalf("normalize LUFS: %v", err)
+	}
+
+	finalLUFS := zaudio.MeasureLUFS(normalized)
+	if math.Abs(finalLUFS-targetLUFS) > 0.1 {
+		t.Errorf("expected final LUFS ~%.2f, got %.2f (initial was %.2f)", targetLUFS, finalLUFS, initialLUFS)
+	}
+}

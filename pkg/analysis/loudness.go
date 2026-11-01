@@ -58,6 +58,7 @@ func (a *LoudnessAnalyzer) Analyze(ctx context.Context, sample core.Sample) (cor
 			"rms_dbfs":         stats.RMSDBFS,
 			"crest_factor":     stats.CrestFactor,
 			"integrated_lufs":  stats.IntegratedLUFS,
+			"true_peak_dbtp":   stats.TruePeakDBTP,
 			"mean_abs":         stats.MeanAbsolute,
 			"duration_seconds": decoded.Buffer.Duration().Seconds(),
 		},
@@ -74,6 +75,7 @@ type LoudnessStats struct {
 	RMSDBFS        float64
 	CrestFactor    float64
 	IntegratedLUFS float64
+	TruePeakDBTP   float64
 	MeanAbsolute   float64
 }
 
@@ -106,13 +108,16 @@ func computeLoudness(buffer zaudio.PCMBuffer) LoudnessStats {
 		crest = peak / rms
 	}
 
+	lufs, truePeakDBTP := zaudio.MeasureLoudness(buffer)
+
 	return LoudnessStats{
 		Peak:           peak,
 		PeakDBFS:       peakDBFS,
 		RMS:            rms,
 		RMSDBFS:        rmsDBFS,
 		CrestFactor:    crest,
-		IntegratedLUFS: rmsDBFS,
+		IntegratedLUFS: lufs,
+		TruePeakDBTP:   truePeakDBTP,
 		MeanAbsolute:   sumAbs / float64(len(buffer.Data)),
 	}
 }

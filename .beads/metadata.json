@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "zounds",
+  "project_id": "688fdf57-3887-4d20-8f3d-fe6f228a6ff6"
+}

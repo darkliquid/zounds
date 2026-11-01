@@ -85,6 +85,53 @@ func TestPlaybackPlayFileDecodesAndPlaysWAV(t *testing.T) {
 	}
 }
 
+func TestPlaybackHandlesDifferentSampleRatesAndChannels(t *testing.T) {
+	t.Parallel()
+
+	var fake *fakeDevice
+	var initRate, initChannels int
+	playback, err := zaudio.NewPlayback(zaudio.PlaybackOptions{
+		DeviceFactory: func(sampleRate, channels int, bufferSize time.Duration) (zaudio.PlaybackDevice, error) {
+			fake = &fakeDevice{}
+			initRate = sampleRate
+			initChannels = channels
+			return fake, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("create playback: %v", err)
+	}
+
+	// 1. Play first buffer: 44100 Hz, 1 channel (mono)
+	buf1 := zaudio.PCMBuffer{
+		SampleRate: 44100,
+		Channels:   1,
+		BitDepth:   16,
+		Data:       []float64{0.1, 0.2, 0.3},
+	}
+	if err := playback.PlayBuffer(context.Background(), buf1); err != nil {
+		t.Fatalf("play buf1: %v", err)
+	}
+	if initRate != 44100 || initChannels != 1 {
+		t.Errorf("expected device initialized to 44100/1, got %d/%d", initRate, initChannels)
+	}
+
+	// 2. Play second buffer with DIFFERENT sample rate (48000 Hz) and channels (2, stereo)
+	// Must NOT error with rate lock-in, but resample and downmix seamlessly!
+	buf2 := zaudio.PCMBuffer{
+		SampleRate: 48000,
+		Channels:   2,
+		BitDepth:   24,
+		Data:       make([]float64, 48000*2),
+	}
+	if err := playback.PlayBuffer(context.Background(), buf2); err != nil {
+		t.Fatalf("play buf2 with different rate/channels failed: %v", err)
+	}
+	if !fake.player.playing {
+		t.Errorf("expected fake player to be playing after resample/channel conversion")
+	}
+}
+
 type fakeDevice struct {
 	player *fakePlayer
 }

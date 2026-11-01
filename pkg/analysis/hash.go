@@ -108,7 +108,7 @@ func computePerceptualHash(buffer zaudio.PCMBuffer) (PerceptualHash, error) {
 	}
 
 	if mono.SampleRate != 8000 {
-		resampled, err := zconvert.ResampleLinear(mono, zconvert.ResampleOptions{TargetSampleRate: 8000})
+		resampled, err := zconvert.Resample(mono, zconvert.ResampleOptions{TargetSampleRate: 8000})
 		if err != nil {
 			return PerceptualHash{}, fmt.Errorf("compute perceptual hash: %w", err)
 		}

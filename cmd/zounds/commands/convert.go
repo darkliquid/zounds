@@ -144,7 +144,7 @@ func applyConversions(buffer zaudio.PCMBuffer, sampleRate, channels int, normali
 	var err error
 
 	if sampleRate > 0 && sampleRate != buffer.SampleRate {
-		buffer, err = zconvert.ResampleLinear(buffer, zconvert.ResampleOptions{TargetSampleRate: sampleRate})
+		buffer, err = zconvert.Resample(buffer, zconvert.ResampleOptions{TargetSampleRate: sampleRate})
 		if err != nil {
 			return zaudio.PCMBuffer{}, err
 		}

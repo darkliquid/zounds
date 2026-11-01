@@ -11,6 +11,13 @@ type ResampleOptions struct {
 	TargetSampleRate int
 }
 
+// Resample resamples the given PCMBuffer to targetRate using band-limited
+// windowed-sinc anti-aliased resampling.
+func Resample(buffer zaudio.PCMBuffer, opts ResampleOptions) (zaudio.PCMBuffer, error) {
+	return zaudio.Resample(buffer, opts.TargetSampleRate)
+}
+
+// ResampleLinear resamples the given PCMBuffer using linear interpolation.
 func ResampleLinear(buffer zaudio.PCMBuffer, opts ResampleOptions) (zaudio.PCMBuffer, error) {
 	if err := buffer.Validate(); err != nil {
 		return zaudio.PCMBuffer{}, fmt.Errorf("resample: %w", err)

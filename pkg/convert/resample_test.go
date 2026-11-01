@@ -71,3 +71,22 @@ func TestResampleLinearRejectsInvalidTargetRate(t *testing.T) {
 		t.Fatal("expected invalid target sample rate error")
 	}
 }
+
+func TestResampleAntiAliased(t *testing.T) {
+	t.Parallel()
+
+	buffer := zaudio.PCMBuffer{
+		SampleRate: 44100,
+		Channels:   1,
+		BitDepth:   16,
+		Data:       make([]float64, 44100),
+	}
+
+	resampled, err := convert.Resample(buffer, convert.ResampleOptions{TargetSampleRate: 48000})
+	if err != nil {
+		t.Fatalf("Resample: %v", err)
+	}
+	if resampled.SampleRate != 48000 {
+		t.Errorf("expected 48000 Hz, got %d", resampled.SampleRate)
+	}
+}

@@ -27,6 +27,7 @@ type Playback struct {
 	mu         sync.Mutex
 	device     PlaybackDevice
 	player     PlaybackPlayer
+	cancelWait context.CancelFunc
 	sampleRate int
 	channels   int
 }
@@ -80,16 +81,36 @@ func (p *Playback) PlayBuffer(ctx context.Context, buffer PCMBuffer) error {
 		return fmt.Errorf("play buffer: unsupported channel count %d", buffer.Channels)
 	}
 
-	data, err := pcmToFloat32LE(buffer)
-	if err != nil {
-		return fmt.Errorf("play buffer: %w", err)
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if err := p.ensureDevice(buffer.SampleRate, buffer.Channels); err != nil {
 		return err
+	}
+
+	playbackBuffer := buffer
+	// Resample if buffer sample rate does not match device sample rate
+	if playbackBuffer.SampleRate != p.sampleRate {
+		resampled, err := Resample(playbackBuffer, p.sampleRate)
+		if err != nil {
+			return fmt.Errorf("resample for playback: %w", err)
+		}
+		playbackBuffer = resampled
+	}
+
+	// Convert channels if buffer channel count does not match device channel count
+	if playbackBuffer.Channels != p.channels {
+		playbackBuffer = convertPlaybackChannels(playbackBuffer, p.channels)
+	}
+
+	data, err := pcmToFloat32LE(playbackBuffer)
+	if err != nil {
+		return fmt.Errorf("play buffer: %w", err)
+	}
+
+	if p.cancelWait != nil {
+		p.cancelWait()
+		p.cancelWait = nil
 	}
 	if p.player != nil {
 		_ = p.player.Close()
@@ -102,15 +123,18 @@ func (p *Playback) PlayBuffer(ctx context.Context, buffer PCMBuffer) error {
 	player.Play()
 
 	if ctx != nil {
-		go func(player PlaybackPlayer) {
-			<-ctx.Done()
+		waitCtx, cancel := context.WithCancel(ctx)
+		p.cancelWait = cancel
+
+		go func(pl PlaybackPlayer, wCtx context.Context) {
+			<-wCtx.Done()
 			p.mu.Lock()
 			defer p.mu.Unlock()
-			if p.player == player {
+			if p.player == pl {
 				_ = p.player.Close()
 				p.player = nil
 			}
-		}(player)
+		}(player, waitCtx)
 	}
 
 	return nil
@@ -120,6 +144,10 @@ func (p *Playback) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.cancelWait != nil {
+		p.cancelWait()
+		p.cancelWait = nil
+	}
 	if p.player == nil {
 		return nil
 	}
@@ -156,9 +184,6 @@ func (p *Playback) Volume() float64 {
 
 func (p *Playback) ensureDevice(sampleRate, channels int) error {
 	if p.device != nil {
-		if p.sampleRate != sampleRate || p.channels != channels {
-			return fmt.Errorf("playback device already initialized for %d Hz/%d channels, cannot play %d Hz/%d channels", p.sampleRate, p.channels, sampleRate, channels)
-		}
 		return nil
 	}
 
@@ -174,6 +199,35 @@ func (p *Playback) ensureDevice(sampleRate, channels int) error {
 	p.sampleRate = sampleRate
 	p.channels = channels
 	return nil
+}
+
+func convertPlaybackChannels(buf PCMBuffer, targetChannels int) PCMBuffer {
+	if buf.Channels == targetChannels {
+		return buf
+	}
+	frames := buf.Frames()
+	out := PCMBuffer{
+		SampleRate: buf.SampleRate,
+		Channels:   targetChannels,
+		BitDepth:   buf.BitDepth,
+		Data:       make([]float64, frames*targetChannels),
+		Metadata:   buf.Metadata,
+	}
+
+	if buf.Channels == 1 && targetChannels == 2 {
+		for i := 0; i < frames; i++ {
+			s := buf.Data[i]
+			out.Data[i*2] = s
+			out.Data[i*2+1] = s
+		}
+	} else if buf.Channels == 2 && targetChannels == 1 {
+		for i := 0; i < frames; i++ {
+			s0 := buf.Data[i*2]
+			s1 := buf.Data[i*2+1]
+			out.Data[i] = (s0 + s1) * 0.5
+		}
+	}
+	return out
 }
 
 func pcmToFloat32LE(buffer PCMBuffer) ([]byte, error) {

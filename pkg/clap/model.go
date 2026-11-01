@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
+	"sync"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 )
@@ -125,13 +127,14 @@ type LabelScore struct {
 }
 
 // Model is a loaded CLAP model that can classify audio against a set of text
-// labels.
+// labels and produce 512-D audio/text embeddings.
 type Model struct {
 	audio     *audioEncoder
 	text      *textEncoder
 	tokenizer *BPETokenizer
 	extractor *FeatureExtractor
 	cfg       Config
+	textCache sync.Map // string -> []float32
 }
 
 // NewModel loads a CLAP model from modelDir.  The directory must contain the
@@ -192,11 +195,10 @@ func NewModel(modelDir string, cfg Config) (*Model, error) {
 	}, nil
 }
 
-// ClassifyAudio computes cosine similarity scores between the audio in buf and
-// each text label, returning results sorted by score (highest first).
-func (m *Model) ClassifyAudio(ctx context.Context, buf zaudio.PCMBuffer, labels []string) ([]LabelScore, error) {
-	if len(labels) == 0 {
-		return nil, nil
+// EmbedAudio computes a normalized 512-D CLAP embedding for the audio in buf.
+func (m *Model) EmbedAudio(ctx context.Context, buf zaudio.PCMBuffer) ([]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	melSpec, err := m.extractor.ExtractFromBuffer(buf)
@@ -210,18 +212,63 @@ func (m *Model) ClassifyAudio(ctx context.Context, buf zaudio.PCMBuffer, labels 
 	}
 	l2Normalize(audioEmb)
 
+	return audioEmb, nil
+}
+
+// EmbedText computes a normalized 512-D CLAP embedding for the given text prompt.
+// Results are cached in-memory so subsequent calls with the same text do not
+// re-run the text encoder.
+func (m *Model) EmbedText(ctx context.Context, text string) ([]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	trimmed := strings.TrimSpace(text)
+	if cached, ok := m.textCache.Load(trimmed); ok {
+		emb := cached.([]float32)
+		out := make([]float32, len(emb))
+		copy(out, emb)
+		return out, nil
+	}
+
+	ids, mask := m.tokenizer.Encode(trimmed)
+	textEmb, err := m.text.encode(ids, mask)
+	if err != nil {
+		return nil, fmt.Errorf("text encode %q: %w", text, err)
+	}
+	l2Normalize(textEmb)
+
+	cached := make([]float32, len(textEmb))
+	copy(cached, textEmb)
+	m.textCache.Store(trimmed, cached)
+
+	out := make([]float32, len(textEmb))
+	copy(out, textEmb)
+	return out, nil
+}
+
+// ClassifyAudio computes cosine similarity scores between the audio in buf and
+// each text label, returning results sorted by score (highest first).
+func (m *Model) ClassifyAudio(ctx context.Context, buf zaudio.PCMBuffer, labels []string) ([]LabelScore, error) {
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	audioEmb, err := m.EmbedAudio(ctx, buf)
+	if err != nil {
+		return nil, err
+	}
+
 	scores := make([]LabelScore, 0, len(labels))
 	for _, label := range labels {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
-		ids, mask := m.tokenizer.Encode(label)
-		textEmb, err := m.text.encode(ids, mask)
+		textEmb, err := m.EmbedText(ctx, label)
 		if err != nil {
-			return nil, fmt.Errorf("text encode %q: %w", label, err)
+			return nil, err
 		}
-		l2Normalize(textEmb)
 
 		scores = append(scores, LabelScore{
 			Label: label,

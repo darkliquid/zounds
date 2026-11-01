@@ -88,12 +88,59 @@ func TestLocalONNXRuntimeEndToEndWhenAssetsPresent(t *testing.T) {
 	for i := range data {
 		data[i] = 0.5 * math.Sin(2*math.Pi*60*float64(i)/sampleRate)
 	}
-	scores, err := model.ClassifyAudio(context.Background(), zaudio.PCMBuffer{
+	buf := zaudio.PCMBuffer{
 		SampleRate: sampleRate,
 		Channels:   1,
 		BitDepth:   16,
 		Data:       data,
-	}, []string{"bass drum kick", "hi hat cymbal"})
+	}
+
+	// Test EmbedAudio
+	audioEmb, err := model.EmbedAudio(context.Background(), buf)
+	if err != nil {
+		t.Fatalf("EmbedAudio failed: %v", err)
+	}
+	if len(audioEmb) != DefaultEmbedDim {
+		t.Fatalf("expected audio embedding dim %d, got %d", DefaultEmbedDim, len(audioEmb))
+	}
+	var audioNorm float64
+	for _, v := range audioEmb {
+		audioNorm += float64(v * v)
+	}
+	audioNorm = math.Sqrt(audioNorm)
+	if math.Abs(audioNorm-1.0) > 1e-3 {
+		t.Fatalf("expected audio embedding to have unit norm, got %v", audioNorm)
+	}
+
+	// Test EmbedText and caching
+	textEmb1, err := model.EmbedText(context.Background(), "bass drum kick")
+	if err != nil {
+		t.Fatalf("EmbedText failed: %v", err)
+	}
+	if len(textEmb1) != DefaultEmbedDim {
+		t.Fatalf("expected text embedding dim %d, got %d", DefaultEmbedDim, len(textEmb1))
+	}
+	var textNorm float64
+	for _, v := range textEmb1 {
+		textNorm += float64(v * v)
+	}
+	textNorm = math.Sqrt(textNorm)
+	if math.Abs(textNorm-1.0) > 1e-3 {
+		t.Fatalf("expected text embedding to have unit norm, got %v", textNorm)
+	}
+
+	// Second call should return cached embedding
+	textEmb2, err := model.EmbedText(context.Background(), "bass drum kick")
+	if err != nil {
+		t.Fatalf("EmbedText (cached) failed: %v", err)
+	}
+	for i := range textEmb1 {
+		if textEmb1[i] != textEmb2[i] {
+			t.Fatalf("cached embedding mismatch at index %d: %v vs %v", i, textEmb1[i], textEmb2[i])
+		}
+	}
+
+	scores, err := model.ClassifyAudio(context.Background(), buf, []string{"bass drum kick", "hi hat cymbal"})
 	if err != nil {
 		t.Fatalf("ClassifyAudio failed: %v", err)
 	}

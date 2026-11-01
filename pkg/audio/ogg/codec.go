@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/jfreymuth/oggvorbis"
 
@@ -36,9 +37,9 @@ func (Codec) Decode(ctx context.Context, reader io.ReadSeeker) (zaudio.DecodeRes
 		return zaudio.DecodeResult{}, fmt.Errorf("decode ogg/vorbis: missing format information")
 	}
 
-	data := make([]float64, len(samples))
-	for i, sample := range samples {
-		data[i] = float64(sample)
+	data, err := clampVorbisSamples(samples)
+	if err != nil {
+		return zaudio.DecodeResult{}, err
 	}
 
 	buffer := zaudio.PCMBuffer{
@@ -61,6 +62,23 @@ func (Codec) Decode(ctx context.Context, reader io.ReadSeeker) (zaudio.DecodeRes
 			Frames:     buffer.Frames(),
 		},
 	}, nil
+}
+
+func clampVorbisSamples(samples []float32) ([]float64, error) {
+	data := make([]float64, len(samples))
+	for i, sample := range samples {
+		v := float64(sample)
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, fmt.Errorf("decode ogg/vorbis: invalid sample value at index %d: %v", i, v)
+		}
+		if v < -1.0 {
+			v = -1.0
+		} else if v > 1.0 {
+			v = 1.0
+		}
+		data[i] = v
+	}
+	return data, nil
 }
 
 func Register(registry *zaudio.Registry) error {

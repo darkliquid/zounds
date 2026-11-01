@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"time"
 )
 
@@ -59,8 +60,8 @@ func (b PCMBuffer) Validate() error {
 	}
 
 	for i, sample := range b.Data {
-		if sample < -1.0 || sample > 1.0 {
-			return fmt.Errorf("sample at index %d is out of range [-1, 1]: %f", i, sample)
+		if math.IsNaN(sample) || math.IsInf(sample, 0) || sample < -1.0 || sample > 1.0 {
+			return fmt.Errorf("sample at index %d is out of range [-1, 1]: %v", i, sample)
 		}
 	}
 

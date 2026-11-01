@@ -1,26 +1,35 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/audio/codecs"
 	"github.com/darkliquid/zounds/pkg/cluster"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
+	"github.com/darkliquid/zounds/pkg/pipeline"
 )
 
 type Server struct {
-	repo *db.Repository
-	mux  *http.ServeMux
+	repo       *db.Repository
+	registry   *audio.Registry
+	mux        *http.ServeMux
+	audioCache map[int64][]byte
+	cacheMu    sync.RWMutex
 }
 
 func NewServer(repo *db.Repository) (*Server, error) {
@@ -29,9 +38,16 @@ func NewServer(repo *db.Repository) (*Server, error) {
 		return nil, fmt.Errorf("load static assets: %w", err)
 	}
 
+	registry, err := codecs.NewRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("init audio codecs: %w", err)
+	}
+
 	s := &Server{
-		repo: repo,
-		mux:  http.NewServeMux(),
+		repo:       repo,
+		registry:   registry,
+		mux:        http.NewServeMux(),
+		audioCache: make(map[int64][]byte),
 	}
 
 	s.mux.Handle("/api/health", http.HandlerFunc(s.handleHealth))
@@ -58,6 +74,12 @@ type sampleResponse struct {
 	core.Sample
 	Tags     []core.Tag           `json:"tags,omitempty"`
 	Analysis *core.SampleAnalysis `json:"analysis,omitempty"`
+}
+
+type similarMatchResponse struct {
+	sampleResponse
+	Similarity float64 `json:"similarity"`
+	Distance   float64 `json:"distance"`
 }
 
 type clusterMemberResponse struct {
@@ -168,6 +190,8 @@ func (s *Server) handleSampleRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleSampleByID(w, r, id)
 	case len(parts) == 2 && parts[1] == "audio":
 		s.handleSampleAudio(w, r, id)
+	case len(parts) == 2 && parts[1] == "similar":
+		s.handleSampleSimilar(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -205,7 +229,187 @@ func (s *Server) handleSampleAudio(w http.ResponseWriter, r *http.Request, id in
 		return
 	}
 
+	format := sample.Format
+	if format == "" {
+		format = core.DetectFormatFromExtension(sample.Path)
+	}
+
+	// Browser HTML5 <audio> elements typically cannot play AIFF natively.
+	// Transcode AIFF on-the-fly to WAV for browser preview.
+	if format == core.FormatAIFF {
+		s.cacheMu.RLock()
+		cached, ok := s.audioCache[id]
+		s.cacheMu.RUnlock()
+
+		if ok {
+			w.Header().Set("Content-Type", "audio/wav")
+			http.ServeContent(w, r, sample.FileName+".wav", sample.ModifiedAt, bytes.NewReader(cached))
+			return
+		}
+
+		decoded, err := audio.DecodeFile(r.Context(), s.registry, sample.Path)
+		if err != nil {
+			http.ServeFile(w, r, sample.Path)
+			return
+		}
+
+		enc, ok := s.registry.Encoder(core.FormatWAV)
+		if !ok {
+			http.ServeFile(w, r, sample.Path)
+			return
+		}
+
+		seeker := &memoryWriteSeeker{}
+		if err := enc.Encode(r.Context(), seeker, decoded.Buffer); err != nil {
+			http.ServeFile(w, r, sample.Path)
+			return
+		}
+
+		wavBytes := seeker.buf
+		s.cacheMu.Lock()
+		if len(s.audioCache) > 100 {
+			s.audioCache = make(map[int64][]byte)
+		}
+		s.audioCache[id] = wavBytes
+		s.cacheMu.Unlock()
+
+		w.Header().Set("Content-Type", "audio/wav")
+		http.ServeContent(w, r, sample.FileName+".wav", sample.ModifiedAt, bytes.NewReader(wavBytes))
+		return
+	}
+
 	http.ServeFile(w, r, sample.Path)
+}
+
+func (s *Server) handleSampleSimilar(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := s.repo.FindSampleByID(ctx, id); err != nil {
+		if err == sql.ErrNoRows {
+			http.NotFound(w, r)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	metric := strings.TrimSpace(r.URL.Query().Get("metric"))
+	if metric == "" {
+		metric = "acoustic"
+	}
+
+	limit := 25
+	if l := strings.TrimSpace(r.URL.Query().Get("limit")); l != "" {
+		if val, err := strconv.Atoi(l); err == nil && val > 0 {
+			limit = val
+		}
+	}
+
+	threshold := 0.0
+	if th := strings.TrimSpace(r.URL.Query().Get("threshold")); th != "" {
+		if val, err := strconv.ParseFloat(th, 64); err == nil {
+			threshold = val
+		}
+	}
+
+	order := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("order")))
+	if order != "asc" && order != "desc" {
+		order = "desc"
+	}
+
+	matches, err := pipeline.FindSimilar(ctx, s.repo, []string{strconv.FormatInt(id, 10)}, pipeline.SimilarOptions{
+		Metric:    metric,
+		Limit:     limit,
+		Threshold: threshold,
+		Order:     order,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "no ") && strings.Contains(err.Error(), "feature vectors") {
+			writeJSON(w, http.StatusOK, []similarMatchResponse{})
+			return
+		}
+		if strings.Contains(err.Error(), "has no") && strings.Contains(err.Error(), "feature vector") {
+			writeJSON(w, http.StatusOK, []similarMatchResponse{})
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	matchIDs := make([]int64, len(matches))
+	for i, m := range matches {
+		matchIDs[i] = m.Sample.ID
+	}
+
+	tagsBySample, err := s.repo.ListTagsForSampleIDs(ctx, matchIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	analysesBySample, err := s.repo.ListSampleAnalysesBySampleIDs(ctx, matchIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	out := make([]similarMatchResponse, len(matches))
+	for i, m := range matches {
+		var analysisPtr *core.SampleAnalysis
+		if a, ok := analysesBySample[m.Sample.ID]; ok {
+			analysisPtr = &a
+		}
+		out[i] = similarMatchResponse{
+			sampleResponse: sampleResponse{
+				Sample:   m.Sample,
+				Tags:     tagsBySample[m.Sample.ID],
+				Analysis: analysisPtr,
+			},
+			Similarity: m.Similarity,
+			Distance:   m.Distance,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
+type memoryWriteSeeker struct {
+	buf []byte
+	pos int64
+}
+
+func (m *memoryWriteSeeker) Write(p []byte) (n int, err error) {
+	minCap := m.pos + int64(len(p))
+	if minCap > int64(len(m.buf)) {
+		newBuf := make([]byte, minCap)
+		copy(newBuf, m.buf)
+		m.buf = newBuf
+	}
+	copy(m.buf[m.pos:], p)
+	m.pos += int64(len(p))
+	return len(p), nil
+}
+
+func (m *memoryWriteSeeker) Seek(offset int64, whence int) (int64, error) {
+	var newPos int64
+	switch whence {
+	case io.SeekStart:
+		newPos = offset
+	case io.SeekCurrent:
+		newPos = m.pos + offset
+	case io.SeekEnd:
+		newPos = int64(len(m.buf)) + offset
+	default:
+		return 0, fmt.Errorf("invalid whence: %d", whence)
+	}
+	if newPos < 0 {
+		return 0, fmt.Errorf("negative position: %d", newPos)
+	}
+	m.pos = newPos
+	return newPos, nil
 }
 
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {

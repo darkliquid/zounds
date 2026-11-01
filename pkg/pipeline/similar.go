@@ -450,7 +450,11 @@ func findSimilarMatches(
 		for _, reference := range references {
 			similarity, err := cluster.CosineSimilarity(reference.Vector.Values, candidate.Values)
 			if err != nil {
-				return nil, fmt.Errorf("compare %q to %q: %w", reference.Sample.Path, sample.Path, err)
+				if strings.Contains(err.Error(), "zero-length vector norm") {
+					similarity = 0
+				} else {
+					return nil, fmt.Errorf("compare %q to %q: %w", reference.Sample.Path, sample.Path, err)
+				}
 			}
 			if similarity > bestSimilarity {
 				bestSimilarity = similarity

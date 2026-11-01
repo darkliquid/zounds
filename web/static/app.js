@@ -2,6 +2,8 @@ const state = {
   browser: "search",
   tag: "",
   query: "",
+  similarityMetric: "acoustic",
+  similarReference: null,
   facets: {
     type: "",
     bpmMin: "",
@@ -71,6 +73,17 @@ function setHidden(id, hidden) {
 }
 
 function sampleURL() {
+  if (state.similarReference) {
+    const params = new URLSearchParams();
+    if (state.similarityMetric) {
+      params.set("metric", state.similarityMetric);
+    }
+    const query = params.toString();
+    return query
+      ? `/api/samples/${encodeURIComponent(state.similarReference.id)}/similar?${query}`
+      : `/api/samples/${encodeURIComponent(state.similarReference.id)}/similar`;
+  }
+
   const params = new URLSearchParams();
   if (state.tag) {
     params.set("tag", state.tag);
@@ -125,6 +138,9 @@ function renderSummary() {
 
   const filter = document.getElementById("active-filter");
   const parts = [];
+  if (state.similarReference) {
+    parts.push(`similar to: ${state.similarReference.fileName} (${state.similarityMetric})`);
+  }
   if (state.tag) {
     parts.push(`tag: ${state.tag}`);
   }
@@ -492,6 +508,14 @@ function createSampleRow(sample, highlighted = false) {
     }
   }
 
+  const sim = sample.similarity ?? sample.Similarity;
+  if (sim !== undefined && sim !== null) {
+    const b = document.createElement("span");
+    b.className = "badge-meta badge-similarity";
+    b.textContent = `${Math.round(sim * 100)}% match`;
+    badges.appendChild(b);
+  }
+
   header.appendChild(badges);
   meta.appendChild(header);
 
@@ -515,6 +539,23 @@ function createSampleRow(sample, highlighted = false) {
   player.preload = "none";
   player.src = `/api/samples/${getSampleID(sample)}/audio`;
   meta.appendChild(player);
+
+  const actions = document.createElement("div");
+  actions.className = "sample-actions";
+
+  const findSimilarBtn = document.createElement("button");
+  findSimilarBtn.type = "button";
+  findSimilarBtn.className = "btn-sm btn-secondary";
+  findSimilarBtn.textContent = "Find similar";
+  findSimilarBtn.addEventListener("click", async () => {
+    state.similarReference = {
+      id: getSampleID(sample),
+      fileName: getSampleFileName(sample),
+    };
+    await refreshSamples();
+  });
+  actions.appendChild(findSimilarBtn);
+  meta.appendChild(actions);
 
   li.appendChild(meta);
   return li;
@@ -544,6 +585,7 @@ async function main() {
   const facetBpmMax = document.getElementById("facet-bpm-max");
   const facetDurationMin = document.getElementById("facet-duration-min");
   const facetDurationMax = document.getElementById("facet-duration-max");
+  const similarityMetric = document.getElementById("similarity-metric");
 
   wireTabs();
   bindClusterInteractions();
@@ -557,6 +599,13 @@ async function main() {
     await refreshClusters();
   });
   document.getElementById("reset-cluster-view").addEventListener("click", () => resetClusterViewport());
+
+  similarityMetric.addEventListener("change", async (event) => {
+    state.similarityMetric = event.target.value;
+    if (state.similarReference) {
+      await refreshSamples();
+    }
+  });
 
   const onFacetChange = async () => {
     state.facets.type = facetType.value;
@@ -580,6 +629,11 @@ async function main() {
   document.getElementById("clear-filters").addEventListener("click", async () => {
     state.tag = "";
     state.query = "";
+    state.similarReference = null;
+    state.similarityMetric = "acoustic";
+    if (similarityMetric) {
+      similarityMetric.value = "acoustic";
+    }
     state.facets = {
       type: "",
       bpmMin: "",

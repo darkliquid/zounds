@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	zaiff "github.com/darkliquid/zounds/pkg/audio/aiff"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
 	"github.com/darkliquid/zounds/web"
@@ -245,6 +247,190 @@ func TestServerStreamsSampleAudio(t *testing.T) {
 	}
 	if rec.Body.String() != "RIFFtest" {
 		t.Fatalf("unexpected body %q", rec.Body.String())
+	}
+}
+
+func TestServerTranscodesAIFFPreviewToWAV(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	tempDir := t.TempDir()
+	audioPath := filepath.Join(tempDir, "bell.aiff")
+
+	file, err := os.Create(audioPath)
+	if err != nil {
+		t.Fatalf("Create aiff: %v", err)
+	}
+
+	codec := zaiff.New()
+	pcm := zaudio.PCMBuffer{
+		SampleRate: 44100,
+		Channels:   1,
+		BitDepth:   16,
+		Data:       []float64{0.0, 0.5, 0.0, -0.5, 0.0},
+	}
+	if err := codec.Encode(context.Background(), file, pcm); err != nil {
+		t.Fatalf("encode aiff: %v", err)
+	}
+	_ = file.Close()
+
+	sampleID, err := repo.UpsertSample(context.Background(), core.Sample{
+		SourceRoot:   tempDir,
+		Path:         audioPath,
+		RelativePath: "bell.aiff",
+		FileName:     "bell.aiff",
+		Extension:    "aiff",
+		Format:       core.FormatAIFF,
+		SizeBytes:    1024,
+		ModifiedAt:   time.Now(),
+		ScannedAt:    time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertSample: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	// 1. Initial request: triggers on-the-fly transcoding
+	req := httptest.NewRequest(http.MethodGet, "/api/samples/"+itoa(sampleID)+"/audio", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "audio/wav" {
+		t.Fatalf("expected audio/wav content-type, got %q", ct)
+	}
+	body := rec.Body.Bytes()
+	if !bytes.HasPrefix(body, []byte("RIFF")) {
+		t.Fatalf("expected RIFF header, got %q", body[:min(len(body), 4)])
+	}
+	if !bytes.Contains(body, []byte("WAVE")) {
+		t.Fatalf("expected WAVE header in body")
+	}
+
+	// 2. Second request: hits cached transcoded WAV
+	req2 := httptest.NewRequest(http.MethodGet, "/api/samples/"+itoa(sampleID)+"/audio", nil)
+	rec2 := httptest.NewRecorder()
+	server.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 on cache hit, got %d", rec2.Code)
+	}
+	if !bytes.Equal(rec2.Body.Bytes(), body) {
+		t.Fatalf("expected cached bytes to match initial transcode")
+	}
+}
+
+func TestServerFindSimilarSamples(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	ctx := context.Background()
+
+	refID := insertSample(t, repo, "kick-ref.wav")
+	nearID := insertSample(t, repo, "kick-near.wav")
+	otherID := insertSample(t, repo, "snare.wav")
+	farID := insertSample(t, repo, "synth-far.wav")
+
+	tagID, err := repo.EnsureTag(ctx, core.Tag{Name: "punchy", NormalizedName: "punchy"})
+	if err != nil {
+		t.Fatalf("EnsureTag: %v", err)
+	}
+	if err := repo.AttachTagToSample(ctx, nearID, tagID, "rules", 0.95); err != nil {
+		t.Fatalf("AttachTagToSample: %v", err)
+	}
+
+	// Insert feature vectors for acoustic similarity
+	if _, err := repo.InsertFeatureVector(ctx, core.FeatureVector{
+		SampleID:   refID,
+		Namespace:  "acoustic",
+		Version:    "1",
+		Dimensions: 3,
+		Values:     []float64{10.0, 100.0, 50.0},
+	}); err != nil {
+		t.Fatalf("insert ref vector: %v", err)
+	}
+	if _, err := repo.InsertFeatureVector(ctx, core.FeatureVector{
+		SampleID:   nearID,
+		Namespace:  "acoustic",
+		Version:    "1",
+		Dimensions: 3,
+		Values:     []float64{12.0, 95.0, 52.0},
+	}); err != nil {
+		t.Fatalf("insert near vector: %v", err)
+	}
+	if _, err := repo.InsertFeatureVector(ctx, core.FeatureVector{
+		SampleID:   otherID,
+		Namespace:  "acoustic",
+		Version:    "1",
+		Dimensions: 3,
+		Values:     []float64{50.0, 10.0, 80.0},
+	}); err != nil {
+		t.Fatalf("insert other vector: %v", err)
+	}
+	if _, err := repo.InsertFeatureVector(ctx, core.FeatureVector{
+		SampleID:   farID,
+		Namespace:  "acoustic",
+		Version:    "1",
+		Dimensions: 3,
+		Values:     []float64{100.0, 20.0, 10.0},
+	}); err != nil {
+		t.Fatalf("insert far vector: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	// 1. Valid similar query
+	req := httptest.NewRequest(http.MethodGet, "/api/samples/"+itoa(refID)+"/similar?metric=acoustic&threshold=-1", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload []struct {
+		ID         int64      `json:"id"`
+		FileName   string     `json:"file_name"`
+		Tags       []core.Tag `json:"tags"`
+		Similarity float64    `json:"similarity"`
+		Distance   float64    `json:"distance"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode similar response: %v", err)
+	}
+
+	if len(payload) != 3 {
+		t.Fatalf("expected 3 similar samples (excluding ref), got %d", len(payload))
+	}
+	if payload[0].FileName != "kick-near.wav" {
+		t.Fatalf("expected kick-near.wav as top match, got %q", payload[0].FileName)
+	}
+	if payload[0].Similarity < 0.95 {
+		t.Fatalf("expected high similarity for kick-near.wav, got %v", payload[0].Similarity)
+	}
+	if len(payload[0].Tags) != 1 || payload[0].Tags[0].NormalizedName != "punchy" {
+		t.Fatalf("expected tags attached to similar match: %#v", payload[0].Tags)
+	}
+	if payload[1].FileName != "synth-far.wav" {
+		t.Fatalf("expected synth-far.wav as second match, got %q", payload[1].FileName)
+	}
+
+	// 2. Non-existent sample ID returns 404
+	req404 := httptest.NewRequest(http.MethodGet, "/api/samples/99999/similar", nil)
+	rec404 := httptest.NewRecorder()
+	server.ServeHTTP(rec404, req404)
+
+	if rec404.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown sample id, got %d", rec404.Code)
 	}
 }
 

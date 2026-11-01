@@ -255,6 +255,33 @@ button.tag.active {
   color: #d1d5db;
 }
 
+.badge-meta.badge-similarity {
+  background: #0369a1;
+  color: #e0f2fe;
+}
+
+.sample-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.btn-sm {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+}
+
+.btn-secondary {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+.btn-secondary:hover {
+  background: #4b5563;
+}
+
 .facet-controls {
   display: flex;
   flex-wrap: wrap;

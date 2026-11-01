@@ -73,6 +73,58 @@ type AnalysisResult struct {
 	FeatureVectors []FeatureVector
 }
 
+// SampleAnalysis is the persisted, per-sample flattening of analyzer output.
+// Numeric fields are pointers because the analyzers do not always produce
+// every measurement (e.g. key confidence on unpitched percussion).
+type SampleAnalysis struct {
+	SampleID           int64
+	DurationSeconds    *float64
+	SampleRate         *int64
+	Channels           *int64
+	BitDepth           *int64
+	BPM                *float64
+	BPMConfidence      *float64
+	KeyTonic           *string
+	KeyMode            *string
+	KeyConfidence      *float64
+	Chord              *string
+	ChordConfidence    *float64
+	PitchHz            *float64
+	MidiNote           *int64
+	CentsOffset        *float64
+	PitchConfidence    *float64
+	LoopClass          *string
+	LoopConfidence     *float64
+	LUFSIntegrated     *float64
+	TruePeakDBTP       *float64
+	AnalyzedModifiedAt time.Time
+	Metrics            map[string]float64
+	Attributes         map[string]string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// SampleProjection is a persisted 2D coordinate for a sample produced by a
+// dimensionality-reduction method over a feature-vector namespace.
+type SampleProjection struct {
+	SampleID  int64
+	Method    string
+	Namespace string
+	X         float64
+	Y         float64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// PerceptualHash is a persisted perceptual fingerprint for a sample.
+type PerceptualHash struct {
+	SampleID  int64
+	Algorithm string
+	Hash      string
+	HashBits  int
+	CreatedAt time.Time
+}
+
 type Analyzer interface {
 	Name() string
 	Version() string

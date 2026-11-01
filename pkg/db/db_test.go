@@ -33,6 +33,9 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		"clusters",
 		"cluster_members",
 		"perceptual_hashes",
+		"schema_migrations",
+		"sample_analyses",
+		"sample_projections",
 	}
 
 	for _, table := range expectedTables {
@@ -202,8 +205,14 @@ func TestMigrateRecordsAppliedVersions(t *testing.T) {
 		t.Fatalf("iterate versions: %v", err)
 	}
 
-	if len(versions) != 1 || versions[0] != "0001_initial" {
+	want := map[string]bool{"0001_initial": true, "0002_rich_analysis_and_provenance": true}
+	if len(versions) != len(want) {
 		t.Fatalf("unexpected applied migrations: %v", versions)
+	}
+	for _, version := range versions {
+		if !want[version] {
+			t.Fatalf("unexpected applied migrations: %v", versions)
+		}
 	}
 }
 
@@ -251,8 +260,8 @@ func TestReopenSkipsAppliedMigrations(t *testing.T) {
 	if err := reopened.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("expected exactly 1 recorded migration, got %d", count)
+	if count != 2 {
+		t.Fatalf("expected exactly 2 recorded migrations, got %d", count)
 	}
 
 	repo = db.NewRepository(reopened)

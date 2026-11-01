@@ -208,7 +208,7 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 			if err != nil {
 				return err
 			}
-			if err := repo.AttachTagToSample(ctx, sample.ID, tagID); err != nil {
+			if err := repo.AttachTagToSample(ctx, sample.ID, tagID, tag.Source, tag.Confidence); err != nil {
 				return err
 			}
 			applied++
@@ -332,7 +332,7 @@ func runManualTagUpdate(ctx context.Context, cmd *cobra.Command, repo *db.Reposi
 		}
 
 		if attach {
-			if err := repo.AttachTagToSample(ctx, sample.ID, tagID); err != nil {
+			if err := repo.AttachTagToSample(ctx, sample.ID, tagID, "manual", 1.0); err != nil {
 				return err
 			}
 		} else {

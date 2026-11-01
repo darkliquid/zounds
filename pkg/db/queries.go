@@ -20,14 +20,12 @@ func (r *Repository) EnsureTag(ctx context.Context, tag core.Tag) (int64, error)
 	}
 
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO tags (name, normalized_name, source, confidence)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO tags (name, normalized_name)
+		VALUES (?, ?)
 		ON CONFLICT(normalized_name) DO UPDATE SET
-			name = excluded.name,
-			source = excluded.source,
-			confidence = excluded.confidence
+			name = excluded.name
 		RETURNING id;
-	`, tag.Name, normalized, tag.Source, tag.Confidence)
+	`, tag.Name, normalized)
 
 	var id int64
 	if err := row.Scan(&id); err != nil {
@@ -37,12 +35,17 @@ func (r *Repository) EnsureTag(ctx context.Context, tag core.Tag) (int64, error)
 	return id, nil
 }
 
-func (r *Repository) AttachTagToSample(ctx context.Context, sampleID, tagID int64) error {
+func (r *Repository) AttachTagToSample(ctx context.Context, sampleID, tagID int64, source string, confidence float64) error {
+	if source == "" {
+		source = "unknown"
+	}
 	if _, err := r.db.ExecContext(ctx, `
-		INSERT INTO sample_tags (sample_id, tag_id)
-		VALUES (?, ?)
-		ON CONFLICT(sample_id, tag_id) DO NOTHING;
-	`, sampleID, tagID); err != nil {
+		INSERT INTO sample_tags (sample_id, tag_id, source, confidence)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(sample_id, tag_id) DO UPDATE SET
+			source = excluded.source,
+			confidence = excluded.confidence;
+	`, sampleID, tagID, source, confidence); err != nil {
 		return fmt.Errorf("attach tag %d to sample %d: %w", tagID, sampleID, err)
 	}
 
@@ -63,7 +66,7 @@ func (r *Repository) RemoveTagFromSample(ctx context.Context, sampleID, tagID in
 func (r *Repository) FindTagByName(ctx context.Context, name string) (core.Tag, error) {
 	normalized := core.NormalizeTagName(name)
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, name, normalized_name, source, confidence, created_at
+		SELECT id, name, normalized_name, created_at
 		FROM tags
 		WHERE normalized_name = ?;
 	`, normalized)
@@ -72,12 +75,14 @@ func (r *Repository) FindTagByName(ctx context.Context, name string) (core.Tag, 
 		tag       core.Tag
 		createdAt sql.NullString
 	)
-	if err := row.Scan(&tag.ID, &tag.Name, &tag.NormalizedName, &tag.Source, &tag.Confidence, &createdAt); err != nil {
+	if err := row.Scan(&tag.ID, &tag.Name, &tag.NormalizedName, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return core.Tag{}, err
 		}
 		return core.Tag{}, fmt.Errorf("find tag %q: %w", normalized, err)
 	}
+	tag.Source = "unknown"
+	tag.Confidence = 1.0
 	tag.CreatedAt = parseTime(createdAt)
 	return tag, nil
 }
@@ -88,13 +93,13 @@ func (r *Repository) ListTagUsage(ctx context.Context) ([]TagUsage, error) {
 			t.id,
 			t.name,
 			t.normalized_name,
-			t.source,
-			t.confidence,
+			COALESCE(GROUP_CONCAT(DISTINCT st.source), 'unknown') AS sources,
+			COALESCE(MAX(st.confidence), 1.0) AS confidence,
 			t.created_at,
 			COUNT(st.sample_id) AS sample_count
 		FROM tags t
 		LEFT JOIN sample_tags st ON st.tag_id = t.id
-		GROUP BY t.id, t.name, t.normalized_name, t.source, t.confidence, t.created_at
+		GROUP BY t.id, t.name, t.normalized_name, t.created_at
 		ORDER BY sample_count DESC, t.normalized_name ASC;
 	`)
 	if err != nil {
@@ -136,9 +141,9 @@ func (r *Repository) ListTagsForSample(ctx context.Context, sampleID int64) ([]c
 			t.id,
 			t.name,
 			t.normalized_name,
-			t.source,
-			t.confidence,
-			t.created_at
+			st.source,
+			st.confidence,
+			st.created_at
 		FROM tags t
 		JOIN sample_tags st ON st.tag_id = t.id
 		WHERE st.sample_id = ?

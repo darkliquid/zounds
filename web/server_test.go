@@ -34,7 +34,7 @@ func TestServerListsSamplesAndTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureTag returned error: %v", err)
 	}
-	if err := repo.AttachTagToSample(context.Background(), sampleID, tagID); err != nil {
+	if err := repo.AttachTagToSample(context.Background(), sampleID, tagID, "rules", 0.7); err != nil {
 		t.Fatalf("AttachTagToSample returned error: %v", err)
 	}
 

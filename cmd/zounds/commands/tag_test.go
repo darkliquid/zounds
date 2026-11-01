@@ -105,8 +105,22 @@ func TestTagCommandAutoAppliesRuleTags(t *testing.T) {
 
 	root := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "rules.db")
+	rulePath := filepath.Join(t.TempDir(), "sub-rules.json")
 	samplePath := filepath.Join(root, "Synth", "tone.wav")
 	writeSineWAVFixture(t, samplePath, 55, 1.0)
+
+	err := os.WriteFile(rulePath, []byte(`{
+  "rules": [
+    {
+      "tag": "sub",
+      "expr": "Metrics[\"frequency_hz\"] >= 20 && Metrics[\"frequency_hz\"] < 80 && Metrics[\"confidence\"] > 0.5",
+      "confidence": 0.9
+    }
+  ]
+}`), 0o644)
+	if err != nil {
+		t.Fatalf("write rule file: %v", err)
+	}
 
 	scan := commands.NewRootCommand()
 	scan.SetArgs([]string{"--db", dbPath, "scan", root})
@@ -115,7 +129,7 @@ func TestTagCommandAutoAppliesRuleTags(t *testing.T) {
 	}
 
 	tagCmd := commands.NewRootCommand()
-	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto"})
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto", "--rule-file", rulePath})
 	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute auto tag: %v", err)
 	}
@@ -191,7 +205,7 @@ func TestTagCommandAutoUsesCustomRuleFile(t *testing.T) {
 		t.Fatalf("missing custom rule tag in %v", names)
 	}
 	if _, ok := names["sub"]; ok {
-		t.Fatalf("expected custom rule file to replace defaults, got %v", names)
+		t.Fatalf("unexpected unconfigured rule tag in %v", names)
 	}
 }
 
@@ -295,6 +309,46 @@ func TestTagCommandAddAndRemoveManualTags(t *testing.T) {
 	}
 	if len(tagsAfter) != 0 {
 		t.Fatalf("expected no tags after remove, got %v", tagsAfter)
+	}
+}
+
+func TestTagCommandAutoSkipsUndecodableSamplesInBatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "tag-skip.db")
+	rulePath := filepath.Join(t.TempDir(), "rules.json")
+	validWav := filepath.Join(root, "tone.wav")
+	unsupportedAAC := filepath.Join(root, "voice.aac")
+
+	writeSineWAVFixture(t, validWav, 55, 1.0)
+	if err := os.WriteFile(unsupportedAAC, []byte("fake-aac"), 0o644); err != nil {
+		t.Fatalf("write aac: %v", err)
+	}
+	if err := os.WriteFile(rulePath, []byte(`{"rules":[{"tag":"instrument:sub","expr":"Metrics[\"frequency_hz\"] < 80"}]}`), 0o644); err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	tagCmd := commands.NewRootCommand()
+	var stdout, stderr bytes.Buffer
+	tagCmd.SetOut(&stdout)
+	tagCmd.SetErr(&stderr)
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto", "--rule-file", rulePath})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected tag --auto batch to skip undecodable .aac, got: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "processed 1 samples and applied 1 tags") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), unsupportedAAC) {
+		t.Fatalf("expected warning for %q in stderr %q", unsupportedAAC, stderr.String())
 	}
 }
 

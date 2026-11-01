@@ -38,6 +38,7 @@ func newRenameCommand(cfg *Config) *cobra.Command {
 				return err
 			}
 
+			ops := make([]zrename.RenameOp, 0, len(samples))
 			for _, sample := range samples {
 				tags, err := repo.ListTagsForSample(ctx, sample.ID)
 				if err != nil {
@@ -47,16 +48,28 @@ func newRenameCommand(cfg *Config) *cobra.Command {
 				if err != nil {
 					return err
 				}
-
-				destination, err := resolveRenameTarget(sample, rendered)
+				destination, err := zrename.ResolveTarget(sample, rendered)
 				if err != nil {
 					return err
 				}
+				ops = append(ops, zrename.RenameOp{
+					Sample:      sample,
+					Destination: destination,
+				})
+			}
+
+			if err := zrename.ValidatePlan(ops); err != nil {
+				return err
+			}
+
+			for _, op := range ops {
+				sample := op.Sample
+				destination := op.Destination
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s -> %s\n", sample.Path, destination); err != nil {
 					return err
 				}
 
-				if cfg.DryRun || sample.Path == destination {
+				if cfg.DryRun || filepath.Clean(sample.Path) == destination {
 					continue
 				}
 
@@ -75,7 +88,7 @@ func newRenameCommand(cfg *Config) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("compute relative path for %q: %w", destination, err)
 				}
-				if err := repo.UpdateSampleLocation(ctx, sample.ID, destination, relativePath, filepath.Base(destination), core.DetectFormatFromExtension(destination), info.Size(), info.ModTime()); err != nil {
+				if err := repo.UpdateSampleLocation(ctx, sample.ID, destination, filepath.ToSlash(relativePath), filepath.Base(destination), core.DetectFormatFromExtension(destination), info.Size(), info.ModTime()); err != nil {
 					return err
 				}
 			}
@@ -89,19 +102,4 @@ func newRenameCommand(cfg *Config) *cobra.Command {
 	flags.StringVar(&targetPath, "path", "", "rename only one indexed sample path")
 
 	return cmd
-}
-
-func resolveRenameTarget(sample core.Sample, rendered string) (string, error) {
-	rendered = strings.TrimSpace(rendered)
-	if rendered == "" {
-		return "", fmt.Errorf("rename template rendered an empty path")
-	}
-	if filepath.Ext(rendered) == "" && sample.Extension != "" {
-		rendered += "." + sample.Extension
-	}
-
-	if filepath.IsAbs(rendered) {
-		return filepath.Clean(rendered), nil
-	}
-	return filepath.Clean(filepath.Join(sample.SourceRoot, rendered)), nil
 }

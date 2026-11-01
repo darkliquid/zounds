@@ -12,6 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/darkliquid/zounds/pkg/analysis"
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/audio/codecs"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
 	"github.com/darkliquid/zounds/pkg/tags"
@@ -92,27 +94,32 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		return err
 	}
 
-	analyzer, err := analysis.NewMetadataAnalyzer(nil)
+	registry, err := codecs.NewRegistry()
+	if err != nil {
+		return fmt.Errorf("create codec registry: %w", err)
+	}
+
+	analyzer, err := analysis.NewMetadataAnalyzer(registry)
 	if err != nil {
 		return err
 	}
-	spectralAnalyzer, err := analysis.NewSpectralAnalyzer(nil)
+	spectralAnalyzer, err := analysis.NewSpectralAnalyzer(registry)
 	if err != nil {
 		return err
 	}
-	dynamicsAnalyzer, err := analysis.NewDynamicsAnalyzer(nil)
+	dynamicsAnalyzer, err := analysis.NewDynamicsAnalyzer(registry)
 	if err != nil {
 		return err
 	}
-	pitchAnalyzer, err := analysis.NewPitchAnalyzer(nil)
+	pitchAnalyzer, err := analysis.NewPitchAnalyzer(registry)
 	if err != nil {
 		return err
 	}
-	keyAnalyzer, err := analysis.NewKeyAnalyzer(nil)
+	keyAnalyzer, err := analysis.NewKeyAnalyzer(registry)
 	if err != nil {
 		return err
 	}
-	harmonicsAnalyzer, err := analysis.NewHarmonicsAnalyzer(nil)
+	harmonicsAnalyzer, err := analysis.NewHarmonicsAnalyzer(registry)
 	if err != nil {
 		return err
 	}
@@ -134,56 +141,52 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		defer func() { _ = clapTagger.Close() }()
 	}
 
+	isBatch := strings.TrimSpace(targetPath) == ""
+	processed := 0
 	applied := 0
 	for _, sample := range samples {
 		verbosef(logger, "tagging sample %s", sample.Path)
+		decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)
+		if err != nil {
+			if isBatch && zaudio.IsDecodeError(err) {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
+				continue
+			}
+			return err
+		}
+		sampleCtx := analysis.ContextWithDecodedSample(ctx, sample.Path, decoded)
+
 		results := make([]core.AnalysisResult, 0, 6)
-		result, err := analyzer.Analyze(ctx, sample)
-		if err != nil {
-			return err
+		for _, a := range []core.Analyzer{
+			analyzer,
+			spectralAnalyzer,
+			dynamicsAnalyzer,
+			pitchAnalyzer,
+			keyAnalyzer,
+			harmonicsAnalyzer,
+		} {
+			res, analyzeErr := a.Analyze(sampleCtx, sample)
+			if analyzeErr != nil {
+				return analyzeErr
+			}
+			results = append(results, res)
 		}
-		results = append(results, result)
-		spectralResult, err := spectralAnalyzer.Analyze(ctx, sample)
-		if err != nil {
-			return err
-		}
-		results = append(results, spectralResult)
-		dynamicsResult, err := dynamicsAnalyzer.Analyze(ctx, sample)
-		if err != nil {
-			return err
-		}
-		results = append(results, dynamicsResult)
-		pitchResult, err := pitchAnalyzer.Analyze(ctx, sample)
-		if err != nil {
-			return err
-		}
-		results = append(results, pitchResult)
-		keyResult, err := keyAnalyzer.Analyze(ctx, sample)
-		if err != nil {
-			return err
-		}
-		results = append(results, keyResult)
-		harmonicsResult, err := harmonicsAnalyzer.Analyze(ctx, sample)
-		if err != nil {
-			return err
-		}
-		results = append(results, harmonicsResult)
 
 		combined := combineAnalysisResults(sample.ID, results...)
 
 		var generated []core.Tag
-		metadataTags, err := metadataTagger.Tags(ctx, sample, combined)
+		metadataTags, err := metadataTagger.Tags(sampleCtx, sample, combined)
 		if err != nil {
 			return err
 		}
-		ruleTags, err := ruleTagger.Tags(ctx, sample, combined)
+		ruleTags, err := ruleTagger.Tags(sampleCtx, sample, combined)
 		if err != nil {
 			return err
 		}
 		generated = append(generated, metadataTags...)
 		generated = append(generated, ruleTags...)
 		if clapTagger != nil {
-			clapTags, err := clapTagger.Tags(ctx, sample, combined)
+			clapTags, err := clapTagger.Tags(sampleCtx, sample, combined)
 			if err != nil {
 				return err
 			}
@@ -191,6 +194,7 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		}
 		generated = dedupeGeneratedTags(generated)
 		verbosef(logger, "generated %d tags for %s: %s", len(generated), sample.Path, strings.Join(tagNames(generated), ", "))
+		processed++
 
 		if cfg.DryRun {
 			applied += len(generated)
@@ -211,7 +215,7 @@ func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository
 		}
 	}
 
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "processed %d samples and applied %d tags\n", len(samples), applied)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "processed %d samples and applied %d tags\n", processed, applied)
 	return err
 }
 

@@ -1,6 +1,8 @@
 package rename_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/darkliquid/zounds/pkg/core"
@@ -54,5 +56,78 @@ func TestRenderTemplateUsesHelpersAndFields(t *testing.T) {
 	}
 	if rendered != "huge-pad_dark_pad_f# minor.wav" {
 		t.Fatalf("unexpected rendered template: %q", rendered)
+	}
+}
+
+func TestSlugSanitizesNamespacesAndPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	data := rename.BuildTemplateData(core.Sample{
+		FileName:  "kick.v2.wav",
+		Extension: "wav",
+		Format:    core.FormatWAV,
+	}, []core.Tag{
+		{Name: "instrument:sub_bass", NormalizedName: "instrument:sub bass", Source: "rules"},
+	}, map[string]string{
+		"unsafe": "../../etc/passwd:evil*name?",
+	})
+
+	rendered, err := rename.RenderTemplate(`{{slug (index .Tags 0)}}_{{slug .Attributes.unsafe}}_{{slug .Stem}}.{{.Extension}}`, data)
+	if err != nil {
+		t.Fatalf("render template: %v", err)
+	}
+	if rendered != "instrument-sub-bass_etc-passwd-evil-name_kick.v2.wav" {
+		t.Fatalf("unexpected rendered template: %q", rendered)
+	}
+}
+
+func TestResolveTargetPreservesExtensionForDottedStemAndRejectsTraversal(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sample := core.Sample{
+		SourceRoot: root,
+		Path:       filepath.Join(root, "Drums", "kick.v2.wav"),
+		FileName:   "kick.v2.wav",
+		Extension:  "wav",
+		Format:     core.FormatWAV,
+	}
+
+	dest, err := rename.ResolveTarget(sample, "renamed/kick.v2")
+	if err != nil {
+		t.Fatalf("ResolveTarget dotted stem: %v", err)
+	}
+	want := filepath.Join(root, "renamed", "kick.v2.wav")
+	if dest != want {
+		t.Fatalf("ResolveTarget = %q, want %q", dest, want)
+	}
+
+	if _, err := rename.ResolveTarget(sample, "../outside/kick.wav"); err == nil {
+		t.Fatal("expected error when relative rename target escapes SourceRoot")
+	}
+}
+
+func TestValidatePlanRejectsDuplicateTargetsAndExistingFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	existingTarget := filepath.Join(root, "existing.wav")
+	if err := os.WriteFile(existingTarget, []byte("audio"), 0o644); err != nil {
+		t.Fatalf("write existing target: %v", err)
+	}
+
+	dupOps := []rename.RenameOp{
+		{Sample: core.Sample{ID: 1, Path: filepath.Join(root, "a.wav")}, Destination: filepath.Join(root, "out", "same.wav")},
+		{Sample: core.Sample{ID: 2, Path: filepath.Join(root, "b.wav")}, Destination: filepath.Join(root, "out", "same.wav")},
+	}
+	if err := rename.ValidatePlan(dupOps); err == nil {
+		t.Fatal("expected duplicate destination error")
+	}
+
+	overwriteOps := []rename.RenameOp{
+		{Sample: core.Sample{ID: 1, Path: filepath.Join(root, "a.wav")}, Destination: existingTarget},
+	}
+	if err := rename.ValidatePlan(overwriteOps); err == nil {
+		t.Fatal("expected existing destination overwrite error")
 	}
 }

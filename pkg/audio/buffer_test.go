@@ -1,6 +1,7 @@
 package audio_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -38,5 +39,25 @@ func TestPCMBufferValidate(t *testing.T) {
 
 	if err := buffer.Validate(); err != nil {
 		t.Fatalf("validate buffer: %v", err)
+	}
+}
+
+func TestPCMBufferValidateRejectsNaNAndInf(t *testing.T) {
+	t.Parallel()
+
+	for name, bad := range map[string]float64{
+		"NaN":  math.NaN(),
+		"+Inf": math.Inf(1),
+		"-Inf": math.Inf(-1),
+	} {
+		buf := zaudio.PCMBuffer{
+			SampleRate: 44100,
+			Channels:   1,
+			BitDepth:   32,
+			Data:       []float64{0.0, bad, 0.25},
+		}
+		if err := buf.Validate(); err == nil {
+			t.Fatalf("expected Validate() to reject %s", name)
+		}
 	}
 }

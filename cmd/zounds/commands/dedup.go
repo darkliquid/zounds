@@ -3,12 +3,14 @@ package commands
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/darkliquid/zounds/pkg/analysis"
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
 	"github.com/darkliquid/zounds/pkg/dedup"
@@ -57,7 +59,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 				}
 				actions = dedup.PlanCull(groups, keepStrategy)
 			} else {
-				hashes, err := buildPerceptualHashes(ctx, samples, logger)
+				hashes, err := buildPerceptualHashes(ctx, samples, cmd.ErrOrStderr(), logger)
 				if err != nil {
 					return err
 				}
@@ -93,7 +95,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func buildPerceptualHashes(ctx context.Context, samples []core.Sample, logger *log.Logger) ([]dedup.PerceptualHash, error) {
+func buildPerceptualHashes(ctx context.Context, samples []core.Sample, errOut io.Writer, logger *log.Logger) ([]dedup.PerceptualHash, error) {
 	analyzer, err := analysis.NewPerceptualHashAnalyzer(nil)
 	if err != nil {
 		return nil, err
@@ -104,6 +106,10 @@ func buildPerceptualHashes(ctx context.Context, samples []core.Sample, logger *l
 		verbosef(logger, "building perceptual hash for %s", sample.Path)
 		result, err := analyzer.Analyze(ctx, sample)
 		if err != nil {
+			if zaudio.IsDecodeError(err) {
+				_, _ = fmt.Fprintf(errOut, "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
+				continue
+			}
 			return nil, err
 		}
 		hashes = append(hashes, dedup.PerceptualHash{

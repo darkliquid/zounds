@@ -38,7 +38,14 @@ func (Codec) Decode(ctx context.Context, reader io.ReadSeeker) (zaudio.DecodeRes
 		return zaudio.DecodeResult{}, fmt.Errorf("decode aiff pcm buffer: %w", err)
 	}
 
-	buffer, err := zaudio.IntBufferToPCM(intBuffer, int(decoder.SampleBitDepth()))
+	bitDepth := int(decoder.SampleBitDepth())
+	if bitDepth == 8 {
+		for i, v := range intBuffer.Data {
+			intBuffer.Data[i] = int(int8(uint8(v)))
+		}
+	}
+
+	buffer, err := zaudio.IntBufferToPCM(intBuffer, bitDepth)
 	if err != nil {
 		return zaudio.DecodeResult{}, fmt.Errorf("decode aiff pcm conversion: %w", err)
 	}

@@ -2,12 +2,37 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/darkliquid/zounds/pkg/core"
 )
+
+var ErrUnsupportedFormat = errors.New("unsupported audio format")
+
+type DecodeError struct {
+	Path   string
+	Format core.AudioFormat
+	Err    error
+}
+
+func (e *DecodeError) Error() string {
+	return fmt.Sprintf("decode %q (%s): %v", e.Path, e.Format, e.Err)
+}
+
+func (e *DecodeError) Unwrap() error {
+	return e.Err
+}
+
+func IsDecodeError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var target *DecodeError
+	return errors.As(err, &target)
+}
 
 type StreamInfo struct {
 	Format     core.AudioFormat
@@ -29,13 +54,23 @@ type Decoder interface {
 }
 
 func DecodeFile(ctx context.Context, registry *Registry, path string) (DecodeResult, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return DecodeResult{}, err
+		}
+	}
 	if registry == nil {
 		return DecodeResult{}, fmt.Errorf("decode %q: nil registry", path)
 	}
 
-	decoder, ok := registry.Decoder(core.DetectFormatFromExtension(path))
+	format := core.DetectFormatFromExtension(path)
+	decoder, ok := registry.Decoder(format)
 	if !ok {
-		return DecodeResult{}, fmt.Errorf("decode %q: no decoder registered for %s", path, core.DetectFormatFromExtension(path))
+		return DecodeResult{}, &DecodeError{
+			Path:   path,
+			Format: format,
+			Err:    fmt.Errorf("%w: no decoder registered for %s", ErrUnsupportedFormat, format),
+		}
 	}
 
 	file, err := os.Open(path)
@@ -44,5 +79,16 @@ func DecodeFile(ctx context.Context, registry *Registry, path string) (DecodeRes
 	}
 	defer func() { _ = file.Close() }()
 
-	return decoder.Decode(ctx, file)
+	decoded, err := decoder.Decode(ctx, file)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return DecodeResult{}, err
+		}
+		return DecodeResult{}, &DecodeError{
+			Path:   path,
+			Format: format,
+			Err:    err,
+		}
+	}
+	return decoded, nil
 }

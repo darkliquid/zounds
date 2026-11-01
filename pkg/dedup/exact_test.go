@@ -2,8 +2,10 @@ package dedup_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -61,6 +63,39 @@ func TestPlanCullKeepsOldest(t *testing.T) {
 	if len(actions[0].Remove) != 1 || actions[0].Remove[0].Path != newest.Path {
 		t.Fatalf("unexpected removal set: %+v", actions[0].Remove)
 	}
+}
+
+func TestExactFinderDoesNotLeakGoroutinesOnMissingFileError(t *testing.T) {
+	root := t.TempDir()
+	samples := make([]core.Sample, 0, 24)
+	// First sample points to a missing file of size 4; remaining samples are real files of size 4.
+	samples = append(samples, core.Sample{
+		Path:      filepath.Join(root, "missing.wav"),
+		SizeBytes: 4,
+	})
+	for i := range 23 {
+		p := filepath.Join(root, fmt.Sprintf("dup_%02d.wav", i))
+		writeFile(t, p, []byte("same"))
+		samples = append(samples, sampleFromPath(t, p))
+	}
+
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
+	finder := dedup.NewExactFinder(4)
+	if _, err := finder.Find(context.Background(), samples); err == nil {
+		t.Fatal("expected error when hashing missing file")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		if runtime.NumGoroutine() <= before+1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goroutine leak after failed ExactFinder.Find: before=%d after=%d", before, runtime.NumGoroutine())
 }
 
 func sampleFromPath(t *testing.T, path string) core.Sample {

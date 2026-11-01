@@ -6,6 +6,7 @@ require (
 	github.com/bogem/id3v2/v2 v2.1.4
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/ebitengine/oto/v3 v3.5.0-alpha.3
+	github.com/ebitengine/purego v0.10.0
 	github.com/expr-lang/expr v1.17.6
 	github.com/go-audio/aiff v1.1.0
 	github.com/go-audio/audio v1.0.0
@@ -14,14 +15,12 @@ require (
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/mewkiz/flac v1.0.13
 	github.com/spf13/cobra v1.10.2
-	github.com/yalue/onnxruntime_go v1.27.0
 	gonum.org/v1/gonum v0.17.0
 	modernc.org/sqlite v1.40.1
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/go-audio/riff v1.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect

@@ -119,3 +119,41 @@ func TestDedupCommandDeletesExactDuplicateFiles(t *testing.T) {
 		t.Fatalf("expected exactly one file to remain, got %d", existing)
 	}
 }
+
+func TestDedupCommandPerceptualSkipsUndecodableSamplesWithWarning(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "dedup-perceptual-skip.db")
+	one := filepath.Join(root, "one.wav")
+	two := filepath.Join(root, "two.wav")
+	badM4A := filepath.Join(root, "clip.m4a")
+
+	writeSineWAVFixture(t, one, 220, 1.2)
+	writeSineWAVFixture(t, two, 220, 1.2)
+	if err := os.WriteFile(badM4A, []byte("fake-m4a"), 0o644); err != nil {
+		t.Fatalf("write m4a: %v", err)
+	}
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	cmd := commands.NewRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--db", dbPath, "--dry-run", "dedup", "--perceptual"})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected dedup --perceptual to skip .m4a, got: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), one) || !strings.Contains(stdout.String(), two) {
+		t.Fatalf("expected perceptual duplicates in stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), badM4A) {
+		t.Fatalf("expected warning for %q in stderr: %q", badM4A, stderr.String())
+	}
+}

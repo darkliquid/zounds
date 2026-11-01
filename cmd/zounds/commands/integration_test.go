@@ -3,6 +3,7 @@ package commands_test
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,12 +16,30 @@ func TestEndToEndWorkflowScanAnalyzeTagAndCluster(t *testing.T) {
 
 	root := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "workflow.db")
+	rulePath := filepath.Join(t.TempDir(), "workflow-rules.json")
 	writeSineWAVFixture(t, filepath.Join(root, "Bass", "sub.wav"), 55, 1.0)
 	writeSineWAVFixture(t, filepath.Join(root, "Leads", "lead.wav"), 880, 1.0)
 
+	if err := os.WriteFile(rulePath, []byte(`{
+  "rules": [
+    {
+      "tag": "sub",
+      "expr": "Metrics[\"frequency_hz\"] < 120 && Metrics[\"confidence\"] > 0.5",
+      "confidence": 0.9
+    },
+    {
+      "tag": "lead",
+      "expr": "Metrics[\"frequency_hz\"] >= 400 && Metrics[\"confidence\"] > 0.5",
+      "confidence": 0.9
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write workflow rules: %v", err)
+	}
+
 	runCommand(t, dbPath, "scan", root)
 	runCommand(t, dbPath, "analyze", "--all")
-	runCommand(t, dbPath, "tag", "--auto")
+	runCommand(t, dbPath, "tag", "--auto", "--rule-file", rulePath)
 
 	clusterOut := runCommand(t, dbPath, "cluster", "--k", "2")
 	if !strings.Contains(clusterOut, "cluster-1") {

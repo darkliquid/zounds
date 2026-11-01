@@ -2,9 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 
@@ -43,6 +45,20 @@ type AutoTagOptions struct {
 	CLAPMinScore float32
 	// CLAPMaxPredicted caps the number of CLAP labels per sample.
 	CLAPMaxPredicted int
+
+	// LocalModelKNN enables the weighted k-NN similarity tagger.
+	LocalModelKNN          bool
+	LocalModelK            int
+	LocalModelMinScore     float64
+	LocalModelMaxPredicted int
+	LocalModelNamespace    string
+
+	// LLM options for OpenAI-compatible tag generation.
+	LLMEndpoint     string
+	LLMAPIKey       string
+	LLMModel        string
+	LLMSystemPrompt string
+	LLMMaxPredicted int
 }
 
 // AutoTagSummary reports the outcome of an auto-tagging run.
@@ -77,6 +93,45 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 		}
 		defer func() { _ = clapTagger.Close() }()
 		taggers = append(taggers, clapTagger)
+	}
+
+	if opts.LocalModelKNN {
+		ns := opts.LocalModelNamespace
+		if ns == "" {
+			ns = "analysis"
+		}
+		examples, err := LoadKNNTrainingExamples(ctx, repo, ns)
+		if err != nil {
+			return AutoTagSummary{}, fmt.Errorf("load k-NN training examples: %w", err)
+		}
+		if len(examples) > 0 {
+			taggers = append(taggers, tags.NewLocalModelTagger(
+				examples,
+				opts.LocalModelK,
+				opts.LocalModelMinScore,
+				opts.LocalModelMaxPredicted,
+			))
+		} else {
+			verbosef(opts.Logger, "warning: k-NN tag propagation requested but no tagged training examples found in namespace %q", ns)
+		}
+	}
+
+	if strings.TrimSpace(opts.LLMEndpoint) != "" && strings.TrimSpace(opts.LLMModel) != "" {
+		apiKey := opts.LLMAPIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+			if apiKey == "" {
+				apiKey = os.Getenv("LLM_API_KEY")
+			}
+		}
+		llmTagger := tags.NewLLMTagger(opts.LLMEndpoint, apiKey, opts.LLMModel)
+		if opts.LLMSystemPrompt != "" {
+			llmTagger.SystemPrompt = opts.LLMSystemPrompt
+		}
+		if opts.LLMMaxPredicted > 0 {
+			llmTagger.MaxPredicted = opts.LLMMaxPredicted
+		}
+		taggers = append(taggers, llmTagger)
 	}
 
 	concurrency := opts.Concurrency
@@ -118,6 +173,9 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 
 		if analysisCurrent {
 			combined = AnalysisResultFromSampleAnalysis(stored)
+			if fvs, err := repo.ListFeatureVectorsForSample(ctx, sample.ID); err == nil {
+				combined.FeatureVectors = fvs
+			}
 		} else {
 			output, analyzeErr := AnalyzeSample(ctx, sample)
 			if analyzeErr != nil {
@@ -141,6 +199,7 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 				}
 			}
 			combined = CombineAnalysisResults(sample.ID, output.Results...)
+			combined.FeatureVectors = append([]core.FeatureVector{output.Vector}, output.FeatureVectors...)
 		}
 
 		generated := make([]core.Tag, 0, 16)
@@ -221,4 +280,93 @@ func NormalizedTagName(tag core.Tag) string {
 		return tag.NormalizedName
 	}
 	return core.NormalizeTagName(tag.Name)
+}
+
+// LoadKNNTrainingExamples queries the repository for all tagged samples that
+// have an existing feature vector in namespace, grouping their tags into
+// tags.TrainingExample values for the k-NN local model tagger.
+func LoadKNNTrainingExamples(ctx context.Context, repo *db.Repository, namespace string) ([]tags.TrainingExample, error) {
+	if strings.TrimSpace(namespace) == "" {
+		namespace = "analysis"
+	}
+
+	rows, err := repo.DB().QueryContext(ctx, `
+		SELECT fv.sample_id, fv.namespace, fv.version, fv.dimensions, fv.values_json,
+		       t.id, t.name, t.normalized_name, st.source, st.confidence
+		FROM feature_vectors fv
+		JOIN sample_tags st ON st.sample_id = fv.sample_id
+		JOIN tags t ON t.id = st.tag_id
+		WHERE fv.namespace = ?
+		ORDER BY fv.sample_id;
+	`, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("query knn training examples: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		examples      []tags.TrainingExample
+		currentID     int64 = -1
+		currentVector core.FeatureVector
+		currentTags   []core.Tag
+	)
+
+	flushCurrent := func() {
+		if currentID >= 0 && len(currentTags) > 0 {
+			examples = append(examples, tags.TrainingExample{
+				Vector: currentVector,
+				Tags:   currentTags,
+			})
+		}
+	}
+
+	for rows.Next() {
+		var (
+			sampleID   int64
+			ns         string
+			version    string
+			dimensions int
+			valuesJSON string
+			tagID      int64
+			tagName    string
+			tagNorm    string
+			source     string
+			confidence float64
+		)
+		if err := rows.Scan(&sampleID, &ns, &version, &dimensions, &valuesJSON, &tagID, &tagName, &tagNorm, &source, &confidence); err != nil {
+			return nil, fmt.Errorf("scan knn training row: %w", err)
+		}
+
+		if sampleID != currentID {
+			flushCurrent()
+			currentID = sampleID
+			currentTags = nil
+			var values []float64
+			if err := json.Unmarshal([]byte(valuesJSON), &values); err != nil {
+				return nil, fmt.Errorf("unmarshal training vector for sample %d: %w", sampleID, err)
+			}
+			currentVector = core.FeatureVector{
+				SampleID:   sampleID,
+				Namespace:  ns,
+				Version:    version,
+				Dimensions: dimensions,
+				Values:     values,
+			}
+		}
+
+		currentTags = append(currentTags, core.Tag{
+			ID:             tagID,
+			Name:           tagName,
+			NormalizedName: tagNorm,
+			Source:         source,
+			Confidence:     confidence,
+		})
+	}
+
+	flushCurrent()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate knn training rows: %w", err)
+	}
+
+	return examples, nil
 }

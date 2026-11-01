@@ -3,8 +3,11 @@ package pipeline_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -253,6 +256,121 @@ func TestAutoTagPersistsTagsWithProvenance(t *testing.T) {
 	for _, tag := range tags {
 		if tag.Source != "rules" {
 			t.Fatalf("tag %q missing provenance source, got %q", tag.Name, tag.Source)
+		}
+	}
+}
+
+func TestAutoTagWithKNN(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := openTestRepo(t)
+	root := t.TempDir()
+
+	// 1. Index and analyze sample 1 (training example)
+	sample1 := indexWAV(t, repo, root, "training-sub.wav", 60)
+	_, err := pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample1}, pipeline.AnalyzeOptions{})
+	if err != nil {
+		t.Fatalf("analyze sample 1: %v", err)
+	}
+
+	// Attach a tag to sample 1
+	tagID, err := repo.EnsureTag(ctx, core.Tag{Name: "instrument:sub_bass", NormalizedName: "instrument:sub bass"})
+	if err != nil {
+		t.Fatalf("ensure tag: %v", err)
+	}
+	if err := repo.AttachTagToSample(ctx, sample1.ID, tagID, "manual", 1.0); err != nil {
+		t.Fatalf("attach tag: %v", err)
+	}
+
+	// 2. Index and analyze sample 2 (target for k-NN tag propagation)
+	sample2 := indexWAV(t, repo, root, "target-sub.wav", 60)
+	_, err = pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample2}, pipeline.AnalyzeOptions{})
+	if err != nil {
+		t.Fatalf("analyze sample 2: %v", err)
+	}
+
+	// 3. Run AutoTag with LocalModelKNN enabled
+	summary, err := pipeline.AutoTag(ctx, repo, []core.Sample{sample2}, pipeline.AutoTagOptions{
+		LocalModelKNN:      true,
+		LocalModelK:        3,
+		LocalModelMinScore: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("AutoTag with KNN: %v", err)
+	}
+	if summary.Processed != 1 {
+		t.Fatalf("expected 1 processed sample, got %d", summary.Processed)
+	}
+
+	// 4. Verify sample 2 received the propagated tag
+	tags, err := repo.ListTagsForSample(ctx, sample2.ID)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	found := false
+	for _, tag := range tags {
+		if tag.NormalizedName == "instrument:sub bass" && tag.Source == "local" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected sample 2 to receive propagated 'instrument:sub bass' tag from k-NN, got %+v", tags)
+	}
+}
+
+func TestAutoTagWithLLM(t *testing.T) {
+	t.Parallel()
+
+	// Mock OpenAI-compatible chat completions endpoint
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]string{
+						"content": "instrument:kick, character:punchy, genre:techno",
+					},
+				},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	ctx := context.Background()
+	repo := openTestRepo(t)
+	root := t.TempDir()
+	sample := indexWAV(t, repo, root, "kick.wav", 80)
+
+	summary, err := pipeline.AutoTag(ctx, repo, []core.Sample{sample}, pipeline.AutoTagOptions{
+		LLMEndpoint:     ts.URL,
+		LLMModel:        "mock-model",
+		LLMMaxPredicted: 4,
+	})
+	if err != nil {
+		t.Fatalf("AutoTag with LLM: %v", err)
+	}
+	if summary.Processed != 1 {
+		t.Fatalf("expected 1 processed sample, got %d", summary.Processed)
+	}
+
+	tags, err := repo.ListTagsForSample(ctx, sample.ID)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	tagMap := make(map[string]string)
+	for _, tag := range tags {
+		tagMap[tag.NormalizedName] = tag.Source
+	}
+
+	for _, want := range []string{"instrument:kick", "character:punchy", "genre:techno"} {
+		if source, ok := tagMap[want]; !ok || source != "llm" {
+			t.Errorf("missing or non-LLM tag %q (got source=%q in %v)", want, source, tagMap)
 		}
 	}
 }

@@ -29,6 +29,16 @@ func newTagCommand(cfg *Config) *cobra.Command {
 		clapLabels       []string
 		clapMinScore     float32
 		clapMaxPredicted int
+		knn              bool
+		knnK             int
+		knnMinScore      float64
+		knnMaxPredicted  int
+		knnNamespace     string
+		llmEndpoint      string
+		llmModel         string
+		llmAPIKey        string
+		llmSystemPrompt  string
+		llmMaxPredicted  int
 	)
 
 	cmd := &cobra.Command{
@@ -54,7 +64,25 @@ func newTagCommand(cfg *Config) *cobra.Command {
 
 			switch {
 			case auto:
-				return runAutoTagging(ctx, cmd, repo, cfg, path, ruleFile, clapModelDir, clapLib, clapLabels, clapMinScore, clapMaxPredicted)
+				return runAutoTagging(ctx, cmd, repo, cfg, autoTagConfig{
+					targetPath:       path,
+					ruleFile:         ruleFile,
+					clapModelDir:     clapModelDir,
+					clapLib:          clapLib,
+					clapLabels:       clapLabels,
+					clapMinScore:     clapMinScore,
+					clapMaxPredicted: clapMaxPredicted,
+					knn:              knn,
+					knnK:             knnK,
+					knnMinScore:      knnMinScore,
+					knnMaxPredicted:  knnMaxPredicted,
+					knnNamespace:     knnNamespace,
+					llmEndpoint:      llmEndpoint,
+					llmModel:         llmModel,
+					llmAPIKey:        llmAPIKey,
+					llmSystemPrompt:  llmSystemPrompt,
+					llmMaxPredicted:  llmMaxPredicted,
+				})
 			case list:
 				return runListTags(ctx, cmd, repo)
 			case len(addTags) > 0:
@@ -80,33 +108,96 @@ func newTagCommand(cfg *Config) *cobra.Command {
 	flags.Float32Var(&clapMinScore, "clap-min-score", 0, "minimum CLAP similarity score required before a label is emitted")
 	flags.IntVar(&clapMaxPredicted, "clap-max-predicted", 0, "maximum number of CLAP labels to emit per sample")
 
+	flags.BoolVar(&knn, "knn", false, "enable k-NN similarity-based tag propagation from existing tagged samples")
+	flags.IntVar(&knnK, "knn-k", 3, "number of nearest neighbors for k-NN tag propagation")
+	flags.Float64Var(&knnMinScore, "knn-min-score", 0.34, "minimum confidence threshold for k-NN tags")
+	flags.IntVar(&knnMaxPredicted, "knn-max-predicted", 5, "maximum number of k-NN tags to predict per sample")
+	flags.StringVar(&knnNamespace, "knn-namespace", "analysis", "feature vector namespace for k-NN similarity")
+
+	flags.StringVar(&llmEndpoint, "llm-endpoint", "", "OpenAI-compatible LLM endpoint URL (e.g. https://api.openai.com/v1)")
+	flags.StringVar(&llmModel, "llm-model", "", "LLM model name (e.g. gpt-4o-mini)")
+	flags.StringVar(&llmAPIKey, "llm-api-key", "", "API key for LLM endpoint (default: $OPENAI_API_KEY)")
+	flags.StringVar(&llmSystemPrompt, "llm-system-prompt", "", "custom system prompt for LLM tagger")
+	flags.IntVar(&llmMaxPredicted, "llm-max-predicted", 0, "maximum number of tags from LLM")
+
 	return cmd
 }
 
-func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string, clapMinScore float32, clapMaxPredicted int) error {
-	if clapModelDir == "" {
-		clapModelDir = os.Getenv("ZOUNDS_CLAP_MODEL_DIR")
+type autoTagConfig struct {
+	targetPath       string
+	ruleFile         string
+	clapModelDir     string
+	clapLib          string
+	clapLabels       []string
+	clapMinScore     float32
+	clapMaxPredicted int
+	knn              bool
+	knnK             int
+	knnMinScore      float64
+	knnMaxPredicted  int
+	knnNamespace     string
+	llmEndpoint      string
+	llmModel         string
+	llmAPIKey        string
+	llmSystemPrompt  string
+	llmMaxPredicted  int
+}
+
+func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, tagCfg autoTagConfig) error {
+	if tagCfg.clapModelDir == "" {
+		tagCfg.clapModelDir = os.Getenv("ZOUNDS_CLAP_MODEL_DIR")
+	}
+	if tagCfg.llmEndpoint == "" {
+		if env := os.Getenv("OPENAI_BASE_URL"); env != "" {
+			tagCfg.llmEndpoint = env
+		} else if env := os.Getenv("LLM_ENDPOINT"); env != "" {
+			tagCfg.llmEndpoint = env
+		}
+	}
+	if tagCfg.llmModel == "" {
+		if env := os.Getenv("LLM_MODEL"); env != "" {
+			tagCfg.llmModel = env
+		}
+	}
+	if tagCfg.llmAPIKey == "" {
+		if env := os.Getenv("OPENAI_API_KEY"); env != "" {
+			tagCfg.llmAPIKey = env
+		} else if env := os.Getenv("LLM_API_KEY"); env != "" {
+			tagCfg.llmAPIKey = env
+		}
 	}
 
-	samples, err := pipeline.SelectSamplesByPath(ctx, repo, targetPath)
+	samples, err := pipeline.SelectSamplesByPath(ctx, repo, tagCfg.targetPath)
 	if err != nil {
 		return err
 	}
 
 	summary, err := pipeline.AutoTag(ctx, repo, samples, pipeline.AutoTagOptions{
 		DryRun:          cfg.DryRun,
-		SkipUndecodable: strings.TrimSpace(targetPath) == "",
+		SkipUndecodable: strings.TrimSpace(tagCfg.targetPath) == "",
 		Concurrency:     cfg.Concurrency,
 		Logger:          newVerboseLogger(cfg, cmd.ErrOrStderr()),
 		OnSkip: func(sample core.Sample, err error) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
 		},
-		RuleFile:         ruleFile,
-		CLAPModelDir:     clapModelDir,
-		CLAPLib:          clapLib,
-		CLAPLabels:       clapLabels,
-		CLAPMinScore:     clapMinScore,
-		CLAPMaxPredicted: clapMaxPredicted,
+		RuleFile:         tagCfg.ruleFile,
+		CLAPModelDir:     tagCfg.clapModelDir,
+		CLAPLib:          tagCfg.clapLib,
+		CLAPLabels:       tagCfg.clapLabels,
+		CLAPMinScore:     tagCfg.clapMinScore,
+		CLAPMaxPredicted: tagCfg.clapMaxPredicted,
+
+		LocalModelKNN:          tagCfg.knn,
+		LocalModelK:            tagCfg.knnK,
+		LocalModelMinScore:     tagCfg.knnMinScore,
+		LocalModelMaxPredicted: tagCfg.knnMaxPredicted,
+		LocalModelNamespace:    tagCfg.knnNamespace,
+
+		LLMEndpoint:     tagCfg.llmEndpoint,
+		LLMModel:        tagCfg.llmModel,
+		LLMAPIKey:       tagCfg.llmAPIKey,
+		LLMSystemPrompt: tagCfg.llmSystemPrompt,
+		LLMMaxPredicted: tagCfg.llmMaxPredicted,
 	})
 	if err != nil {
 		return err

@@ -3,7 +3,10 @@ package commands_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -423,4 +426,130 @@ func openRepoForTest(t *testing.T, dbPath string) *db.Repository {
 	})
 
 	return db.NewRepository(database)
+}
+
+func TestTagCommandKNN(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "tag-knn.db")
+	sample1Path := filepath.Join(root, "kick1.wav")
+	sample2Path := filepath.Join(root, "kick2.wav")
+	writeSineWAVFixture(t, sample1Path, 60, 0.5)
+	writeSineWAVFixture(t, sample2Path, 60, 0.5)
+
+	// Scan
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	// Analyze
+	analyze := commands.NewRootCommand()
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	// Manually tag sample 1
+	tagCmd := commands.NewRootCommand()
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--path", sample1Path, "--add", "instrument:kick"})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("manual tag: %v", err)
+	}
+
+	// Auto-tag with --knn on sample 2
+	autoTag := commands.NewRootCommand()
+	var out bytes.Buffer
+	autoTag.SetOut(&out)
+	autoTag.SetErr(&out)
+	autoTag.SetArgs([]string{"--db", dbPath, "tag", "--auto", "--path", sample2Path, "--knn", "--knn-min-score", "0.1"})
+	if err := autoTag.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("auto tag with knn: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	s2, err := repo.FindSampleByPath(context.Background(), sample2Path)
+	if err != nil {
+		t.Fatalf("find sample 2: %v", err)
+	}
+	tags, err := repo.ListTagsForSample(context.Background(), s2.ID)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	found := false
+	for _, tag := range tags {
+		if tag.NormalizedName == "instrument:kick" && tag.Source == "local" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected propagated tag 'instrument:kick' from knn on sample 2, got %+v", tags)
+	}
+}
+
+func TestTagCommandLLM(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]string{
+						"content": "instrument:synth, character:ambient",
+					},
+				},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "tag-llm.db")
+	samplePath := filepath.Join(root, "pad.wav")
+	writeSineWAVFixture(t, samplePath, 440, 0.5)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	autoTag := commands.NewRootCommand()
+	var out bytes.Buffer
+	autoTag.SetOut(&out)
+	autoTag.SetErr(&out)
+	autoTag.SetArgs([]string{
+		"--db", dbPath,
+		"tag", "--auto",
+		"--path", samplePath,
+		"--llm-endpoint", ts.URL,
+		"--llm-model", "test-model",
+	})
+	if err := autoTag.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("auto tag with llm: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	s, err := repo.FindSampleByPath(context.Background(), samplePath)
+	if err != nil {
+		t.Fatalf("find sample: %v", err)
+	}
+	tags, err := repo.ListTagsForSample(context.Background(), s.ID)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	tagMap := make(map[string]string)
+	for _, tag := range tags {
+		tagMap[tag.NormalizedName] = tag.Source
+	}
+
+	for _, want := range []string{"instrument:synth", "character:ambient"} {
+		if source, ok := tagMap[want]; !ok || source != "llm" {
+			t.Errorf("missing or non-LLM tag %q in %v", want, tagMap)
+		}
+	}
 }

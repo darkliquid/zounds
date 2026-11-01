@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/darkliquid/zounds/pkg/core"
 )
@@ -172,6 +173,71 @@ func (r *Repository) ListTagsForSample(ctx context.Context, sampleID int64) ([]c
 	}
 
 	return tags, nil
+}
+
+// ListTagsForSampleIDs retrieves tags for a slice of sample IDs in batches.
+func (r *Repository) ListTagsForSampleIDs(ctx context.Context, sampleIDs []int64) (map[int64][]core.Tag, error) {
+	result := make(map[int64][]core.Tag, len(sampleIDs))
+	if len(sampleIDs) == 0 {
+		return result, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(sampleIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(sampleIDs) {
+			end = len(sampleIDs)
+		}
+		chunk := sampleIDs[i:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for j, id := range chunk {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		query := fmt.Sprintf(`
+			SELECT
+				st.sample_id,
+				t.id,
+				t.name,
+				t.normalized_name,
+				st.source,
+				st.confidence,
+				st.created_at
+			FROM sample_tags st
+			JOIN tags t ON t.id = st.tag_id
+			WHERE st.sample_id IN (%s)
+			ORDER BY st.sample_id, t.normalized_name;
+		`, strings.Join(placeholders, ","))
+
+		rows, err := r.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("list tags for sample ids: %w", err)
+		}
+
+		for rows.Next() {
+			var (
+				sampleID  int64
+				tag       core.Tag
+				createdAt sql.NullString
+			)
+			if err := rows.Scan(&sampleID, &tag.ID, &tag.Name, &tag.NormalizedName, &tag.Source, &tag.Confidence, &createdAt); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan sample tag: %w", err)
+			}
+			tag.CreatedAt = parseTime(createdAt)
+			result[sampleID] = append(result[sampleID], tag)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterate sample tags: %w", err)
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
 }
 
 func (r *Repository) FindSamplesByTag(ctx context.Context, name string) ([]core.Sample, error) {

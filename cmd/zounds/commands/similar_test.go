@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/darkliquid/zounds/cmd/zounds/commands"
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
@@ -132,6 +133,41 @@ func TestSimilarCommandUsesBestReferenceAndAscendingOrder(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "/tmp/right.wav") || !strings.Contains(lines[1], "/tmp/right-match.wav") {
 		t.Fatalf("unexpected second line: %q", lines[1])
+	}
+}
+
+func TestSimilarCommandMetricSelection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "similar-metrics.db")
+
+	refPath := filepath.Join(root, "ref.wav")
+	nearPath := filepath.Join(root, "near.wav")
+	farPath := filepath.Join(root, "far.wav")
+
+	writeSineWAVFixture(t, refPath, 440, 1.0)
+	writeSineWAVFixture(t, nearPath, 442, 1.0)
+	writeSineWAVFixture(t, farPath, 1760, 1.0)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	analyze := commands.NewRootCommand()
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	metrics := []string{"acoustic", "timbre", "harmonic", "rhythm", "perceptual", "hybrid"}
+	for _, m := range metrics {
+		output := runCommand(t, dbPath, "similar", "--metric", m, "--threshold", "-1", "--limit", "2", "ref.wav")
+		if !strings.Contains(output, "ref.wav") {
+			t.Fatalf("metric %s: expected ref.wav in output, got: %q", m, output)
+		}
 	}
 }
 

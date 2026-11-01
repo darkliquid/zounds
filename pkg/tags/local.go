@@ -67,6 +67,22 @@ func (t LocalModelTagger) Tags(_ context.Context, _ core.Sample, result core.Ana
 	}
 
 	query := result.FeatureVectors[0]
+	if len(t.examples) > 0 && t.examples[0].Vector.Namespace != "" {
+		for _, fv := range result.FeatureVectors {
+			if fv.Namespace == t.examples[0].Vector.Namespace {
+				query = fv
+				break
+			}
+		}
+	} else if len(t.examples) > 0 {
+		wantDim := len(t.examples[0].Vector.Values)
+		for _, fv := range result.FeatureVectors {
+			if len(fv.Values) == wantDim {
+				query = fv
+				break
+			}
+		}
+	}
 	type neighbor struct {
 		tags   []core.Tag
 		weight float64

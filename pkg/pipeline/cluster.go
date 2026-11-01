@@ -12,8 +12,11 @@ import (
 // ClusterOptions controls a clustering run.
 type ClusterOptions struct {
 	// Namespace selects the feature-vector namespace to cluster over
-	// (default "analysis").
+	// (default "acoustic").
 	Namespace string
+	// Metric selects the metric space: "acoustic", "clap", "timbre", "harmonic",
+	// "rhythm", "perceptual", "hybrid".
+	Metric string
 	// Method is the clustering algorithm; only "kmeans" is supported.
 	Method string
 	// K is the cluster count for kmeans.
@@ -40,21 +43,14 @@ func Cluster(ctx context.Context, repo *db.Repository, opts ClusterOptions) (clu
 	if method != "kmeans" {
 		return cluster.KMeansResult{}, fmt.Errorf("unsupported clustering method %q", method)
 	}
-	namespace := opts.Namespace
-	if namespace == "" {
-		namespace = "analysis"
-	}
 	projection := opts.Projection
 	if projection == "" {
 		projection = "pca"
 	}
 
-	vectors, err := repo.ListFeatureVectors(ctx, namespace)
+	vectors, err := LoadMetricVectors(ctx, repo, opts.Metric, opts.Namespace)
 	if err != nil {
 		return cluster.KMeansResult{}, err
-	}
-	if len(vectors) == 0 {
-		return cluster.KMeansResult{}, fmt.Errorf("no %s feature vectors found; run zounds analyze first", namespace)
 	}
 
 	model := cluster.NewKMeans(cluster.KMeansOptions{K: opts.K})

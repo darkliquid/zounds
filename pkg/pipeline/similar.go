@@ -7,7 +7,10 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 
+	"github.com/darkliquid/zounds/pkg/analysis"
 	"github.com/darkliquid/zounds/pkg/cluster"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
@@ -24,9 +27,11 @@ type SimilarMatch struct {
 
 // SimilarOptions controls a similarity search.
 type SimilarOptions struct {
-	// Namespace selects the feature-vector namespace to search over
-	// (default "analysis").
+	// Namespace selects the feature-vector namespace to search over (default "acoustic").
 	Namespace string
+	// Metric selects the metric space: "acoustic", "clap", "timbre", "harmonic",
+	// "rhythm", "perceptual", "hybrid".
+	Metric string
 	// Threshold is the minimum cosine similarity required for a match.
 	Threshold float64
 	// Order sorts matches by similarity: "asc" or "desc" (default "desc").
@@ -45,10 +50,6 @@ var errReferenceNotFound = fmt.Errorf("reference not found")
 // FindSimilar runs a multi-reference cosine similarity search over stored
 // feature vectors.
 func FindSimilar(ctx context.Context, repo *db.Repository, references []string, opts SimilarOptions) ([]SimilarMatch, error) {
-	namespace := opts.Namespace
-	if namespace == "" {
-		namespace = "analysis"
-	}
 	order := opts.Order
 	if order == "" {
 		order = "desc"
@@ -71,12 +72,9 @@ func FindSimilar(ctx context.Context, repo *db.Repository, references []string, 
 		return nil, fmt.Errorf("no indexed samples found")
 	}
 
-	vectors, err := repo.ListFeatureVectors(ctx, namespace)
+	vectors, err := LoadMetricVectors(ctx, repo, opts.Metric, opts.Namespace)
 	if err != nil {
 		return nil, err
-	}
-	if len(vectors) == 0 {
-		return nil, fmt.Errorf("no %s feature vectors found; run zounds analyze first", namespace)
 	}
 
 	refs, err := resolveSimilarReferences(references, samples, vectors)
@@ -93,6 +91,241 @@ func FindSimilar(ctx context.Context, repo *db.Repository, references []string, 
 	}
 
 	return matches, nil
+}
+
+// LoadMetricVectors loads, resolves, and standardizes feature vectors according to
+// the requested metric ("acoustic", "clap", "timbre", "harmonic", "rhythm",
+// "perceptual", "hybrid") or custom namespace.
+func LoadMetricVectors(ctx context.Context, repo *db.Repository, metric string, customNamespace string) ([]core.FeatureVector, error) {
+	if metric == "" && customNamespace != "" {
+		metric = customNamespace
+	}
+	if metric == "" {
+		ns := customNamespace
+		if ns == "" {
+			ns = "analysis"
+		}
+		vectors, err := repo.ListFeatureVectors(ctx, ns)
+		if err != nil {
+			return nil, err
+		}
+		if len(vectors) == 0 {
+			return nil, fmt.Errorf("no %s feature vectors found; run zounds analyze first", ns)
+		}
+		return vectors, nil
+	}
+
+	metric = strings.ToLower(metric)
+
+	switch metric {
+	case "clap":
+		vectors, err := repo.ListFeatureVectors(ctx, "clap")
+		if err != nil {
+			return nil, err
+		}
+		if len(vectors) == 0 {
+			return nil, fmt.Errorf("no clap feature vectors found; run zounds analyze --clap-model-dir first")
+		}
+		return vectors, nil
+
+	case "acoustic", "timbre", "harmonic", "rhythm":
+		vectors, err := repo.ListFeatureVectors(ctx, metric)
+		if err == nil && len(vectors) > 0 {
+			return cluster.StandardizeVectors(vectors, cluster.StandardizeIQR), nil
+		}
+
+		rawVectors, err := repo.ListFeatureVectors(ctx, "analysis")
+		if err != nil {
+			return nil, err
+		}
+		if len(rawVectors) == 0 {
+			return nil, fmt.Errorf("no %s feature vectors found; run zounds analyze first", metric)
+		}
+
+		subspaceVectors := make([]core.FeatureVector, 0, len(rawVectors))
+		for _, raw := range rawVectors {
+			sub := projectSubspace(raw, metric)
+			subspaceVectors = append(subspaceVectors, sub)
+		}
+
+		return cluster.StandardizeVectors(subspaceVectors, cluster.StandardizeIQR), nil
+
+	case "perceptual":
+		vectors, err := repo.ListFeatureVectors(ctx, "perceptual")
+		if err == nil && len(vectors) > 0 {
+			return vectors, nil
+		}
+		storedHashes, err := repo.ListPerceptualHashes(ctx, "spectral-8x8")
+		if err != nil {
+			return nil, err
+		}
+		if len(storedHashes) == 0 {
+			return nil, fmt.Errorf("no perceptual feature vectors found; run zounds analyze first")
+		}
+		vectors = make([]core.FeatureVector, 0, len(storedHashes))
+		for _, h := range storedHashes {
+			if h.Hash == "" {
+				continue
+			}
+			var val uint64
+			if _, err := fmt.Sscanf(h.Hash, "%016x", &val); err == nil {
+				bits64 := make([]float64, 64)
+				for b := 0; b < 64; b++ {
+					if (val & (uint64(1) << uint(b))) != 0 {
+						bits64[b] = 1.0
+					}
+				}
+				vectors = append(vectors, core.FeatureVector{
+					SampleID:   h.SampleID,
+					Namespace:  "perceptual",
+					Dimensions: 64,
+					Values:     bits64,
+				})
+			}
+		}
+		if len(vectors) == 0 {
+			return nil, fmt.Errorf("no perceptual feature vectors found; run zounds analyze first")
+		}
+		return vectors, nil
+
+	case "hybrid":
+		// Combine semantic CLAP and standardized acoustic representations
+		acousticVectors, err := LoadMetricVectors(ctx, repo, "acoustic", "")
+		if err != nil {
+			return nil, err
+		}
+		clapVectors, err := repo.ListFeatureVectors(ctx, "clap")
+		if err != nil || len(clapVectors) == 0 {
+			return acousticVectors, nil
+		}
+
+		clapBySample := make(map[int64][]float64, len(clapVectors))
+		for _, cv := range clapVectors {
+			clapBySample[cv.SampleID] = cv.Values
+		}
+
+		hybridVectors := make([]core.FeatureVector, 0, len(acousticVectors))
+		scale := 1.0 / math.Sqrt(2.0)
+		for _, av := range acousticVectors {
+			normAcoustic := l2Normalize(av.Values)
+			if clapVals, ok := clapBySample[av.SampleID]; ok {
+				normClap := l2Normalize(clapVals)
+				combined := make([]float64, len(normClap)+len(normAcoustic))
+				for idx, val := range normClap {
+					combined[idx] = val * scale
+				}
+				offset := len(normClap)
+				for idx, val := range normAcoustic {
+					combined[offset+idx] = val * scale
+				}
+				hybridVectors = append(hybridVectors, core.FeatureVector{
+					SampleID:   av.SampleID,
+					Namespace:  "hybrid",
+					Dimensions: len(combined),
+					Values:     combined,
+				})
+			} else {
+				hybridVectors = append(hybridVectors, av)
+			}
+		}
+		return hybridVectors, nil
+
+	default:
+		vectors, err := repo.ListFeatureVectors(ctx, metric)
+		if err != nil {
+			return nil, err
+		}
+		if len(vectors) == 0 {
+			return nil, fmt.Errorf("no %s feature vectors found; run zounds analyze first", metric)
+		}
+		return vectors, nil
+	}
+}
+
+var (
+	subspaceIndicesOnce sync.Once
+	timbreIndices       []int
+	harmonicIndices     []int
+	rhythmIndices       []int
+)
+
+func initSubspaceIndices() {
+	allNames := analysis.FeatureNames()
+	indexMap := make(map[string]int, len(allNames))
+	for i, name := range allNames {
+		indexMap[name] = i
+	}
+
+	resolve := func(names []string) []int {
+		idxs := make([]int, 0, len(names))
+		for _, name := range names {
+			if idx, ok := indexMap[name]; ok {
+				idxs = append(idxs, idx)
+			}
+		}
+		return idxs
+	}
+
+	timbreIndices = resolve(analysis.TimbreFeatureNames())
+	harmonicIndices = resolve(analysis.HarmonicFeatureNames())
+	rhythmIndices = resolve(analysis.RhythmFeatureNames())
+}
+
+func projectSubspace(raw core.FeatureVector, subspace string) core.FeatureVector {
+	subspaceIndicesOnce.Do(initSubspaceIndices)
+
+	allNames := analysis.FeatureNames()
+	if len(raw.Values) != len(allNames) {
+		return raw
+	}
+
+	var targetIndices []int
+	switch subspace {
+	case "acoustic":
+		// Indices 4..94: strictly excludes container metadata (sample_rate, channels, bit_depth, bitrate)
+		targetIndices = make([]int, len(allNames)-4)
+		for i := range targetIndices {
+			targetIndices[i] = i + 4
+		}
+	case "timbre":
+		targetIndices = timbreIndices
+	case "harmonic":
+		targetIndices = harmonicIndices
+	case "rhythm":
+		targetIndices = rhythmIndices
+	default:
+		return raw
+	}
+
+	vals := make([]float64, len(targetIndices))
+	for i, idx := range targetIndices {
+		vals[i] = raw.Values[idx]
+	}
+
+	return core.FeatureVector{
+		ID:         raw.ID,
+		SampleID:   raw.SampleID,
+		Namespace:  subspace,
+		Version:    raw.Version,
+		Dimensions: len(vals),
+		Values:     vals,
+		CreatedAt:  raw.CreatedAt,
+	}
+}
+
+func l2Normalize(vec []float64) []float64 {
+	var sumSq float64
+	for _, v := range vec {
+		sumSq += v * v
+	}
+	norm := math.Sqrt(sumSq)
+	res := make([]float64, len(vec))
+	if norm > 1e-12 {
+		for i, v := range vec {
+			res[i] = v / norm
+		}
+	}
+	return res
 }
 
 func resolveSimilarReferences(args []string, samples []core.Sample, vectors []core.FeatureVector) ([]similarReference, error) {

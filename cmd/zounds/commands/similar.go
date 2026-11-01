@@ -13,6 +13,7 @@ func newSimilarCommand(cfg *Config) *cobra.Command {
 		limit     int
 		threshold float64
 		order     string
+		metric    string
 	)
 
 	cmd := &cobra.Command{
@@ -28,6 +29,7 @@ func newSimilarCommand(cfg *Config) *cobra.Command {
 			defer func() { _ = closer.Close() }()
 
 			matches, err := pipeline.FindSimilar(ctx, repo, args, pipeline.SimilarOptions{
+				Metric:    metric,
 				Threshold: threshold,
 				Order:     order,
 				Limit:     limit,
@@ -60,6 +62,7 @@ func newSimilarCommand(cfg *Config) *cobra.Command {
 	flags.IntVar(&limit, "limit", 25, "maximum number of similar samples to display (0 for unlimited)")
 	flags.Float64Var(&threshold, "threshold", 0, "minimum cosine similarity required")
 	flags.StringVar(&order, "order", "desc", "sort order for similarity: asc or desc")
+	flags.StringVar(&metric, "metric", "", "metric space: acoustic, clap, timbre, harmonic, rhythm, perceptual, hybrid")
 
 	return cmd
 }

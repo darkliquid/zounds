@@ -14,6 +14,7 @@ func newClusterCommand(cfg *Config) *cobra.Command {
 		method     string
 		k          int
 		projection string
+		metric     string
 	)
 
 	cmd := &cobra.Command{
@@ -28,6 +29,7 @@ func newClusterCommand(cfg *Config) *cobra.Command {
 			defer func() { _ = closer.Close() }()
 
 			result, err := pipeline.Cluster(ctx, repo, pipeline.ClusterOptions{
+				Metric:     metric,
 				Method:     method,
 				K:          k,
 				Projection: projection,
@@ -42,6 +44,7 @@ func newClusterCommand(cfg *Config) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
+	flags.StringVar(&metric, "metric", "", "metric space: acoustic, clap, timbre, harmonic, rhythm, perceptual, hybrid")
 	flags.StringVar(&method, "method", "kmeans", "clustering method")
 	flags.IntVar(&k, "k", 8, "number of clusters for kmeans")
 	flags.StringVar(&projection, "projection", "pca", "projection method for cluster visualization (pca or tsne)")

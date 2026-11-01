@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,47 @@ func TestClusterCommandDryRunPrintsSummary(t *testing.T) {
 	}
 	if len(clusters) != 0 {
 		t.Fatalf("expected no persisted clusters in dry-run, got %d", len(clusters))
+	}
+}
+
+func TestClusterCommandMetricSelection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "cluster-metrics.db")
+
+	f1 := filepath.Join(root, "f1.wav")
+	f2 := filepath.Join(root, "f2.wav")
+	f3 := filepath.Join(root, "f3.wav")
+
+	writeSineWAVFixture(t, f1, 440, 1.0)
+	writeSineWAVFixture(t, f2, 442, 1.0)
+	writeSineWAVFixture(t, f3, 1760, 1.0)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	analyze := commands.NewRootCommand()
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	for _, m := range []string{"acoustic", "timbre", "harmonic", "rhythm", "perceptual", "hybrid"} {
+		cmd := commands.NewRootCommand()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{"--db", dbPath, "cluster", "--metric", m, "--k", "2"})
+		if err := cmd.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("metric %s: execute cluster: %v", m, err)
+		}
+		if !strings.Contains(out.String(), "cluster-") {
+			t.Fatalf("metric %s: expected cluster labels in output:\n%s", m, out.String())
+		}
 	}
 }
 

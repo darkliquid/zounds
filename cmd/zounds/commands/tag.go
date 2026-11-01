@@ -6,17 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/darkliquid/zounds/pkg/analysis"
-	zaudio "github.com/darkliquid/zounds/pkg/audio"
-	"github.com/darkliquid/zounds/pkg/audio/codecs"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
-	"github.com/darkliquid/zounds/pkg/tags"
+	"github.com/darkliquid/zounds/pkg/pipeline"
 )
 
 func newTagCommand(cfg *Config) *cobra.Command {
@@ -87,193 +83,31 @@ func newTagCommand(cfg *Config) *cobra.Command {
 }
 
 func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string, clapMinScore float32, clapMaxPredicted int) error {
-	logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
-
-	samples, err := selectSamplesForTagging(ctx, repo, targetPath)
+	samples, err := pipeline.SelectSamplesByPath(ctx, repo, targetPath)
 	if err != nil {
 		return err
 	}
 
-	registry, err := codecs.NewRegistry()
-	if err != nil {
-		return fmt.Errorf("create codec registry: %w", err)
-	}
-
-	analyzer, err := analysis.NewMetadataAnalyzer(registry)
-	if err != nil {
-		return err
-	}
-	spectralAnalyzer, err := analysis.NewSpectralAnalyzer(registry)
-	if err != nil {
-		return err
-	}
-	dynamicsAnalyzer, err := analysis.NewDynamicsAnalyzer(registry)
-	if err != nil {
-		return err
-	}
-	pitchAnalyzer, err := analysis.NewPitchAnalyzer(registry)
-	if err != nil {
-		return err
-	}
-	keyAnalyzer, err := analysis.NewKeyAnalyzer(registry)
-	if err != nil {
-		return err
-	}
-	harmonicsAnalyzer, err := analysis.NewHarmonicsAnalyzer(registry)
-	if err != nil {
-		return err
-	}
-	metadataTagger := tags.NewMetadataTagger()
-	var ruleTagger tags.RuleTagger
-	if strings.TrimSpace(ruleFile) != "" {
-		ruleTagger, err = tags.NewRuleTaggerFromFile(ruleFile)
-	}
+	summary, err := pipeline.AutoTag(ctx, repo, samples, pipeline.AutoTagOptions{
+		DryRun:          cfg.DryRun,
+		SkipUndecodable: strings.TrimSpace(targetPath) == "",
+		Logger:          newVerboseLogger(cfg, cmd.ErrOrStderr()),
+		OnSkip: func(sample core.Sample, err error) {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
+		},
+		RuleFile:         ruleFile,
+		CLAPModelDir:     clapModelDir,
+		CLAPLib:          clapLib,
+		CLAPLabels:       clapLabels,
+		CLAPMinScore:     clapMinScore,
+		CLAPMaxPredicted: clapMaxPredicted,
+	})
 	if err != nil {
 		return err
 	}
 
-	var clapTagger *tags.LocalCLAPTagger
-	if strings.TrimSpace(clapModelDir) != "" {
-		clapTagger, err = tags.NewLocalCLAPTagger(clapModelDir, clapLib, clapLabels, clapMinScore, clapMaxPredicted)
-		if err != nil {
-			return fmt.Errorf("initialise CLAP tagger: %w", err)
-		}
-		defer func() { _ = clapTagger.Close() }()
-	}
-
-	isBatch := strings.TrimSpace(targetPath) == ""
-	processed := 0
-	applied := 0
-	for _, sample := range samples {
-		verbosef(logger, "tagging sample %s", sample.Path)
-		decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)
-		if err != nil {
-			if isBatch && zaudio.IsDecodeError(err) {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
-				continue
-			}
-			return err
-		}
-		sampleCtx := analysis.ContextWithDecodedSample(ctx, sample.Path, decoded)
-
-		results := make([]core.AnalysisResult, 0, 6)
-		for _, a := range []core.Analyzer{
-			analyzer,
-			spectralAnalyzer,
-			dynamicsAnalyzer,
-			pitchAnalyzer,
-			keyAnalyzer,
-			harmonicsAnalyzer,
-		} {
-			res, analyzeErr := a.Analyze(sampleCtx, sample)
-			if analyzeErr != nil {
-				return analyzeErr
-			}
-			results = append(results, res)
-		}
-
-		combined := combineAnalysisResults(sample.ID, results...)
-
-		var generated []core.Tag
-		metadataTags, err := metadataTagger.Tags(sampleCtx, sample, combined)
-		if err != nil {
-			return err
-		}
-		ruleTags, err := ruleTagger.Tags(sampleCtx, sample, combined)
-		if err != nil {
-			return err
-		}
-		generated = append(generated, metadataTags...)
-		generated = append(generated, ruleTags...)
-		if clapTagger != nil {
-			clapTags, err := clapTagger.Tags(sampleCtx, sample, combined)
-			if err != nil {
-				return err
-			}
-			generated = append(generated, clapTags...)
-		}
-		generated = dedupeGeneratedTags(generated)
-		verbosef(logger, "generated %d tags for %s: %s", len(generated), sample.Path, strings.Join(tagNames(generated), ", "))
-		processed++
-
-		if cfg.DryRun {
-			applied += len(generated)
-			verbosef(logger, "skipping tag persistence for %s (dry run)", sample.Path)
-			continue
-		}
-
-		for _, tag := range generated {
-			verbosef(logger, "attaching tag %s to %s", normalizedTagName(tag), sample.Path)
-			tagID, err := repo.EnsureTag(ctx, tag)
-			if err != nil {
-				return err
-			}
-			if err := repo.AttachTagToSample(ctx, sample.ID, tagID, tag.Source, tag.Confidence); err != nil {
-				return err
-			}
-			applied++
-		}
-	}
-
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "processed %d samples and applied %d tags\n", processed, applied)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "processed %d samples and applied %d tags\n", summary.Processed, summary.Applied)
 	return err
-}
-
-func combineAnalysisResults(sampleID int64, results ...core.AnalysisResult) core.AnalysisResult {
-	combined := core.AnalysisResult{
-		SampleID:    sampleID,
-		Analyzer:    "combined",
-		Version:     "0.1.0",
-		Metrics:     analysis.FlattenMetrics(results...),
-		Attributes:  map[string]string{},
-		CompletedAt: results[0].CompletedAt,
-	}
-
-	for _, result := range results {
-		for key, value := range result.Attributes {
-			combined.Attributes[key] = value
-		}
-	}
-
-	return combined
-}
-
-func dedupeGeneratedTags(tags []core.Tag) []core.Tag {
-	seen := make(map[string]struct{}, len(tags))
-	out := make([]core.Tag, 0, len(tags))
-	for _, tag := range tags {
-		if tag.NormalizedName == "" {
-			tag.NormalizedName = core.NormalizeTagName(tag.Name)
-		}
-		if tag.NormalizedName == "" {
-			continue
-		}
-		if _, ok := seen[tag.NormalizedName]; ok {
-			continue
-		}
-		seen[tag.NormalizedName] = struct{}{}
-		out = append(out, tag)
-	}
-	return out
-}
-
-func tagNames(tags []core.Tag) []string {
-	names := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		names = append(names, normalizedTagName(tag))
-	}
-	if len(names) == 0 {
-		return []string{"<none>"}
-	}
-	slices.Sort(names)
-	return names
-}
-
-func normalizedTagName(tag core.Tag) string {
-	if tag.NormalizedName != "" {
-		return tag.NormalizedName
-	}
-	return core.NormalizeTagName(tag.Name)
 }
 
 func runListTags(ctx context.Context, cmd *cobra.Command, repo *db.Repository) error {
@@ -349,19 +183,4 @@ func runManualTagUpdate(ctx context.Context, cmd *cobra.Command, repo *db.Reposi
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s %d tags for %s\n", action, updated, sample.Path)
 	return err
-}
-
-func selectSamplesForTagging(ctx context.Context, repo *db.Repository, targetPath string) ([]core.Sample, error) {
-	if strings.TrimSpace(targetPath) != "" {
-		sample, err := repo.FindSampleByPath(ctx, targetPath)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, fmt.Errorf("sample %q is not indexed", targetPath)
-			}
-			return nil, err
-		}
-		return []core.Sample{sample}, nil
-	}
-
-	return repo.ListSamples(ctx)
 }

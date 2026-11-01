@@ -1,23 +1,13 @@
 package commands
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"runtime"
-	"runtime/debug"
-	"sync"
 
 	"github.com/spf13/cobra"
 
-	"github.com/darkliquid/zounds/pkg/analysis"
-	zaudio "github.com/darkliquid/zounds/pkg/audio"
-	"github.com/darkliquid/zounds/pkg/audio/codecs"
 	"github.com/darkliquid/zounds/pkg/core"
-	"github.com/darkliquid/zounds/pkg/db"
+	"github.com/darkliquid/zounds/pkg/pipeline"
 )
 
 func newAnalyzeCommand(cfg *Config) *cobra.Command {
@@ -41,38 +31,24 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 			}
 			defer func() { _ = closer.Close() }()
 
-			samples, err := selectSamplesForAnalysis(ctx, repo, analyzeAll, id)
+			samples, err := pipeline.SelectSamplesForAnalysis(ctx, repo, analyzeAll, id)
 			if err != nil {
 				return err
 			}
 
-			logger := newVerboseLogger(cfg, cmd.ErrOrStderr())
-			builder := analysis.NewFeatureVectorBuilder(nil)
-			processed := 0
-			for _, sample := range samples {
-				verbosef(logger, "analyzing sample %s", sample.Path)
-				results, vector, err := analyzeSample(ctx, sample, builder)
-				if err != nil {
-					if analyzeAll && zaudio.IsDecodeError(err) {
-						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
-						continue
-					}
-					return err
-				}
-				_ = results
-
-				if !cfg.DryRun {
-					verbosef(logger, "persisting feature vector for %s", sample.Path)
-					if _, err := repo.ReplaceFeatureVector(ctx, vector); err != nil {
-						return err
-					}
-				} else {
-					verbosef(logger, "skipping feature vector persistence for %s (dry run)", sample.Path)
-				}
-				processed++
+			summary, err := pipeline.AnalyzeSamples(ctx, repo, samples, pipeline.AnalyzeOptions{
+				DryRun:          cfg.DryRun,
+				SkipUndecodable: analyzeAll,
+				Logger:          newVerboseLogger(cfg, cmd.ErrOrStderr()),
+				OnSkip: func(sample core.Sample, err error) {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
+				},
+			})
+			if err != nil {
+				return err
 			}
 
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "analyzed %d samples\n", processed)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "analyzed %d samples\n", summary.Processed)
 			return err
 		},
 	}
@@ -90,8 +66,7 @@ func newInfoCommand(cfg *Config) *cobra.Command {
 		Short: "Show detailed information about a sample",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := args[0]
-			info, err := analyzeFileInfo(cmd.Context(), path)
+			info, err := pipeline.AnalyzeFileInfo(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -103,162 +78,4 @@ func newInfoCommand(cfg *Config) *cobra.Command {
 	}
 
 	return cmd
-}
-
-func selectSamplesForAnalysis(ctx context.Context, repo *db.Repository, all bool, id int64) ([]core.Sample, error) {
-	if all {
-		return repo.ListSamples(ctx)
-	}
-
-	sample, err := repo.FindSampleByID(ctx, id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("sample id %d is not indexed", id)
-		}
-		return nil, err
-	}
-
-	return []core.Sample{sample}, nil
-}
-
-func analyzeSample(ctx context.Context, sample core.Sample, builder *analysis.FeatureVectorBuilder) ([]core.AnalysisResult, core.FeatureVector, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	registry, err := codecs.NewRegistry()
-	if err != nil {
-		return nil, core.FeatureVector{}, fmt.Errorf("create codec registry: %w", err)
-	}
-	decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)
-	if err != nil {
-		return nil, core.FeatureVector{}, fmt.Errorf("decode sample %q: %w", sample.Path, err)
-	}
-	ctx = analysis.ContextWithDecodedSample(ctx, sample.Path, decoded)
-
-	analyzers := []core.Analyzer{}
-	factory := []func() (core.Analyzer, error){
-		func() (core.Analyzer, error) { return analysis.NewMetadataAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewSpectralAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewKeyAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewBeatAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewPitchAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewLoudnessAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewDynamicsAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewHPSSAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewQualityAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewHarmonicsAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewFormantAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewSpliceAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewLoopAnalyzer(registry) },
-	}
-
-	for _, create := range factory {
-		analyzer, err := create()
-		if err != nil {
-			return nil, core.FeatureVector{}, err
-		}
-		analyzers = append(analyzers, analyzer)
-	}
-
-	results, err := runAnalyzers(ctx, sample, analyzers, runtime.GOMAXPROCS(0))
-	if err != nil {
-		return nil, core.FeatureVector{}, err
-	}
-
-	vector, err := builder.Build(sample.ID, results...)
-	if err != nil {
-		return nil, core.FeatureVector{}, err
-	}
-
-	return results, vector, nil
-}
-
-func runAnalyzers(ctx context.Context, sample core.Sample, analyzers []core.Analyzer, workers int) ([]core.AnalysisResult, error) {
-	results := make([]core.AnalysisResult, len(analyzers))
-	errs := make([]error, len(analyzers))
-
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(analyzers) {
-		workers = len(analyzers)
-	}
-	sem := make(chan struct{}, workers)
-	var wg sync.WaitGroup
-	for i, analyzer := range analyzers {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(index int, analyzer core.Analyzer) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					errs[index] = fmt.Errorf("%s analysis panicked: %v; stack=%s", analyzer.Name(), recovered, debug.Stack())
-				}
-			}()
-			result, err := analyzer.Analyze(ctx, sample)
-			if err != nil {
-				errs[index] = fmt.Errorf("%s analysis failed: %w", analyzer.Name(), err)
-				return
-			}
-			results[index] = result
-		}(i, analyzer)
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
-		}
-	}
-	return results, nil
-}
-
-func analyzeFileInfo(ctx context.Context, path string) (map[string]any, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	sample := core.Sample{
-		Path:      path,
-		Extension: extensionFromPath(path),
-		Format:    core.DetectFormatFromExtension(path),
-		SizeBytes: info.Size(),
-	}
-
-	builder := analysis.NewFeatureVectorBuilder(nil)
-	results, vector, err := analyzeSample(ctx, sample, builder)
-	if err != nil {
-		return nil, err
-	}
-
-	output := map[string]any{
-		"path":           path,
-		"format":         sample.Format,
-		"feature_names":  analysis.FeatureNames(),
-		"feature_vector": vector.Values,
-		"analyzers":      map[string]map[string]any{},
-	}
-
-	analyzers := output["analyzers"].(map[string]map[string]any)
-	for _, result := range results {
-		analyzers[result.Analyzer] = map[string]any{
-			"metrics":    result.Metrics,
-			"attributes": result.Attributes,
-		}
-	}
-
-	return output, nil
-}
-
-func extensionFromPath(path string) string {
-	format := core.DetectFormatFromExtension(path)
-	switch format {
-	case core.FormatUnknown:
-		return ""
-	default:
-		return string(format)
-	}
 }

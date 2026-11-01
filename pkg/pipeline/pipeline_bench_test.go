@@ -1,4 +1,4 @@
-package commands
+package pipeline_test
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/darkliquid/zounds/pkg/analysis"
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/audio/wav"
 	"github.com/darkliquid/zounds/pkg/core"
+	"github.com/darkliquid/zounds/pkg/pipeline"
 )
 
 func BenchmarkAnalyzeSampleEndToEnd(b *testing.B) {
@@ -28,13 +28,12 @@ func BenchmarkAnalyzeSampleEndToEnd(b *testing.B) {
 		Format:    core.FormatWAV,
 		SizeBytes: info.Size(),
 	}
-	builder := analysis.NewFeatureVectorBuilder(nil)
 	ctx := context.Background()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, err := analyzeSample(ctx, sample, builder); err != nil {
-			b.Fatalf("analyzeSample returned error: %v", err)
+		if _, err := pipeline.AnalyzeSample(ctx, sample); err != nil {
+			b.Fatalf("AnalyzeSample returned error: %v", err)
 		}
 	}
 }

@@ -1,4 +1,4 @@
-package commands
+package pipeline
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func TestRunAnalyzersPreservesInputOrderUnderConcurrency(t *testing.T) {
 		stubAnalyzer{name: "third", delay: 15 * time.Millisecond},
 	}
 
-	results, err := runAnalyzers(context.Background(), sample, analyzers, 3)
+	results, err := RunAnalyzers(context.Background(), sample, analyzers, 3)
 	if err != nil {
 		t.Fatalf("runAnalyzers returned error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestRunAnalyzersConvertsPanicToErrorWithoutHanging(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := runAnalyzers(context.Background(), sample, analyzers, 1)
+		_, err := RunAnalyzers(context.Background(), sample, analyzers, 1)
 		done <- err
 	}()
 
@@ -109,7 +109,7 @@ func TestRunAnalyzersWrapsAnalyzerErrors(t *testing.T) {
 		},
 	}
 
-	_, err := runAnalyzers(context.Background(), sample, analyzers, 1)
+	_, err := RunAnalyzers(context.Background(), sample, analyzers, 1)
 	if err == nil {
 		t.Fatalf("expected wrapped analyzer error")
 	}

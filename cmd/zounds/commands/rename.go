@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/darkliquid/zounds/pkg/core"
+	"github.com/darkliquid/zounds/pkg/pipeline"
 	zrename "github.com/darkliquid/zounds/pkg/rename"
 )
 
@@ -33,7 +34,7 @@ func newRenameCommand(cfg *Config) *cobra.Command {
 			}
 			defer func() { _ = closer.Close() }()
 
-			samples, err := selectSamplesForTagging(ctx, repo, targetPath)
+			samples, err := pipeline.SelectSamplesByPath(ctx, repo, targetPath)
 			if err != nil {
 				return err
 			}

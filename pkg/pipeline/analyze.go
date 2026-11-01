@@ -1,0 +1,223 @@
+package pipeline
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"sync"
+
+	"github.com/darkliquid/zounds/pkg/analysis"
+	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/core"
+	"github.com/darkliquid/zounds/pkg/db"
+)
+
+// AnalyzeOptions controls a batch analysis run.
+type AnalyzeOptions struct {
+	// DryRun runs analysis but skips persistence.
+	DryRun bool
+	// SkipUndecodable logs a warning and continues when a sample cannot be
+	// decoded instead of aborting the batch.
+	SkipUndecodable bool
+	// Concurrency sets how many samples are analyzed in parallel
+	// (<= 0 means 1, sequential processing).
+	Concurrency int
+	// Logger receives verbose per-sample progress lines when non-nil.
+	Logger *log.Logger
+	// OnSkip receives samples that were skipped due to decode errors when
+	// SkipUndecodable is set.
+	OnSkip func(sample core.Sample, err error)
+}
+
+// AnalyzeSummary reports the outcome of a batch analysis run.
+type AnalyzeSummary struct {
+	Processed int
+	Skipped   int
+}
+
+// AnalyzeSamples runs the analyzer suite over samples, persisting the
+// feature vector and rich sample analysis per sample unless DryRun is set.
+func AnalyzeSamples(ctx context.Context, repo *db.Repository, samples []core.Sample, opts AnalyzeOptions) (AnalyzeSummary, error) {
+	if repo == nil {
+		return AnalyzeSummary{}, errors.New("pipeline: nil repository")
+	}
+
+	concurrency := opts.Concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(samples) {
+		concurrency = len(samples)
+	}
+
+	var (
+		summary   AnalyzeSummary
+		summaryMu sync.Mutex
+		firstErr  error
+		errMu     sync.Mutex
+	)
+
+	setErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
+	jobs := make(chan core.Sample)
+	var wg sync.WaitGroup
+	for range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sample := range jobs {
+				verbosef(opts.Logger, "analyzing sample %s", sample.Path)
+				output, err := AnalyzeSample(ctx, sample)
+				if err != nil {
+					if opts.SkipUndecodable && zaudio.IsDecodeError(err) {
+						summaryMu.Lock()
+						summary.Skipped++
+						summaryMu.Unlock()
+						if opts.OnSkip != nil {
+							opts.OnSkip(sample, err)
+						}
+						continue
+					}
+					setErr(err)
+					return
+				}
+
+				if opts.DryRun {
+					verbosef(opts.Logger, "skipping persistence for %s (dry run)", sample.Path)
+				} else {
+					verbosef(opts.Logger, "persisting feature vector for %s", sample.Path)
+					if err := PersistAnalysisOutput(ctx, repo, sample, output); err != nil {
+						setErr(err)
+						return
+					}
+				}
+
+				summaryMu.Lock()
+				summary.Processed++
+				summaryMu.Unlock()
+			}
+		}()
+	}
+
+	for _, sample := range samples {
+		jobs <- sample
+	}
+	close(jobs)
+	wg.Wait()
+
+	return summary, firstErr
+}
+
+// PersistAnalysisOutput stores the feature vector and the flattened rich
+// analysis (metrics and attributes) for a sample.
+func PersistAnalysisOutput(ctx context.Context, repo *db.Repository, sample core.Sample, output AnalysisOutput) error {
+	if _, err := repo.ReplaceFeatureVector(ctx, output.Vector); err != nil {
+		return err
+	}
+
+	combined := CombineAnalysisResults(sample.ID, output.Results...)
+	if err := repo.UpsertSampleAnalysis(ctx, SampleAnalysisFromResult(combined)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// AnalyzeFileInfo runs the full analyzer suite against an arbitrary file on
+// disk and returns a JSON-friendly report.
+func AnalyzeFileInfo(ctx context.Context, path string) (map[string]any, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	sample := core.Sample{
+		Path:      path,
+		Extension: ExtensionFromPath(path),
+		Format:    core.DetectFormatFromExtension(path),
+		SizeBytes: info.Size(),
+	}
+
+	output, err := AnalyzeSample(ctx, sample)
+	if err != nil {
+		return nil, err
+	}
+
+	report := map[string]any{
+		"path":           path,
+		"format":         sample.Format,
+		"feature_names":  analysis.FeatureNames(),
+		"feature_vector": output.Vector.Values,
+		"analyzers":      map[string]map[string]any{},
+	}
+
+	analyzers := report["analyzers"].(map[string]map[string]any)
+	for _, result := range output.Results {
+		analyzers[result.Analyzer] = map[string]any{
+			"metrics":    result.Metrics,
+			"attributes": result.Attributes,
+		}
+	}
+
+	return report, nil
+}
+
+// SelectSamplesForAnalysis resolves the analyze command target selection:
+// all indexed samples or a single sample by id.
+func SelectSamplesForAnalysis(ctx context.Context, repo *db.Repository, all bool, id int64) ([]core.Sample, error) {
+	if all {
+		return repo.ListSamples(ctx)
+	}
+
+	sample, err := repo.FindSampleByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("sample id %d is not indexed", id)
+		}
+		return nil, err
+	}
+
+	return []core.Sample{sample}, nil
+}
+
+// SelectSamplesByPath resolves a single indexed sample by path, or lists all
+// indexed samples when targetPath is empty.
+func SelectSamplesByPath(ctx context.Context, repo *db.Repository, targetPath string) ([]core.Sample, error) {
+	if targetPath != "" {
+		sample, err := repo.FindSampleByPath(ctx, targetPath)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("sample %q is not indexed", targetPath)
+			}
+			return nil, err
+		}
+		return []core.Sample{sample}, nil
+	}
+
+	return repo.ListSamples(ctx)
+}
+
+// ExtensionFromPath returns the canonical extension for a path based on its
+// detected audio format.
+func ExtensionFromPath(path string) string {
+	format := core.DetectFormatFromExtension(path)
+	if format == core.FormatUnknown {
+		return ""
+	}
+	return string(format)
+}
+
+func verbosef(logger *log.Logger, format string, args ...any) {
+	if logger != nil {
+		logger.Printf(format, args...)
+	}
+}

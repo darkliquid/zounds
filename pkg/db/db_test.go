@@ -173,3 +173,94 @@ func TestFindSampleByPathReturnsNoRows(t *testing.T) {
 		t.Fatalf("expected sql.ErrNoRows, got %v", err)
 	}
 }
+
+func TestMigrateRecordsAppliedVersions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := db.Open(ctx, db.Options{Path: filepath.Join(t.TempDir(), "zounds.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	rows, err := database.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var versions []string
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			t.Fatalf("scan version: %v", err)
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate versions: %v", err)
+	}
+
+	if len(versions) != 1 || versions[0] != "0001_initial" {
+		t.Fatalf("unexpected applied migrations: %v", versions)
+	}
+}
+
+func TestReopenSkipsAppliedMigrations(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "zounds.db")
+
+	database, err := db.Open(ctx, db.Options{Path: path})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	repo := db.NewRepository(database)
+	if _, err := repo.UpsertSample(ctx, core.Sample{
+		SourceRoot:   "/library",
+		Path:         "/library/kicks/deep.wav",
+		RelativePath: "kicks/deep.wav",
+		FileName:     "deep.wav",
+		Extension:    "wav",
+		Format:       core.FormatWAV,
+		SizeBytes:    2048,
+	}); err != nil {
+		t.Fatalf("upsert sample: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	var out bytes.Buffer
+	reopened, err := db.Open(ctx, db.Options{
+		Path:   path,
+		Logger: log.New(&out, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("reopen database: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	if !strings.Contains(out.String(), "migration migrations/0001_initial.sql already applied") {
+		t.Fatalf("expected migration skip message, got %q", out.String())
+	}
+
+	var count int
+	if err := reopened.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+		t.Fatalf("count schema_migrations: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 recorded migration, got %d", count)
+	}
+
+	repo = db.NewRepository(reopened)
+	samples, err := repo.ListSamples(ctx)
+	if err != nil {
+		t.Fatalf("list samples: %v", err)
+	}
+	if len(samples) != 1 {
+		t.Fatalf("expected sample data to survive reopen, got %d samples", len(samples))
+	}
+}

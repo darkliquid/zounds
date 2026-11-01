@@ -1,10 +1,12 @@
 package analysis
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/core"
 )
 
 // ---------------------------------------------------------------------------
@@ -293,5 +295,125 @@ func TestBoundaryWindowSize(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("boundaryWindowSize(%d) = %d, want %d", tc.signalLen, got, tc.want)
 		}
+	}
+}
+
+func TestComputeLoopStatsGappedDrumLoop(t *testing.T) {
+	t.Parallel()
+
+	// 2-bar drum loop at 120 BPM = 4.0 seconds at 44.1 kHz.
+	// Starts with a kick transient at t=0, has beat hits every 0.5s,
+	// but the last 0.2s before 4.0s has low-level ambient decay (gapped tail),
+	// meaning head (kick transient) != tail (ambient decay).
+	sampleRate := 44100
+	duration := 4.0
+	frames := int(duration * float64(sampleRate))
+	data := make([]float64, frames)
+
+	// Hits at beat intervals: 0.0s, 0.5s, 1.0s, 1.5s, 2.0s, 2.5s, 3.0s, 3.5s
+	beatInterval := int(0.5 * float64(sampleRate))
+	for beat := 0; beat < 8; beat++ {
+		start := beat * beatInterval
+		for i := 0; i < 2000 && start+i < frames; i++ {
+			tSec := float64(i) / float64(sampleRate)
+			// Kick hit on downbeats, snare/hat on backbeats
+			freq := 60.0
+			if beat%2 == 1 {
+				freq = 200.0
+			}
+			data[start+i] += math.Sin(2*math.Pi*freq*tSec) * math.Exp(-tSec*25.0)
+		}
+	}
+	// Add low-level room tone / cymbal decay throughout, including tail
+	for i := range data {
+		tSec := float64(i) / float64(sampleRate)
+		data[i] += 0.05 * math.Sin(2*math.Pi*8000*tSec) * (0.8 + 0.2*math.Sin(2*math.Pi*2*tSec))
+	}
+
+	buffer := testPCMBuffer(sampleRate, data)
+	stats := computeLoopStats(buffer)
+
+	if stats.BarAlignment < 0.70 {
+		t.Errorf("expected high bar alignment >= 0.70, got %f", stats.BarAlignment)
+	}
+	if stats.Confidence < 0.65 {
+		t.Errorf("expected confidence >= 0.65 (loop), got %f (boundary=%f, tailRMS=%f, barAlign=%f)",
+			stats.Confidence, stats.BoundarySimilarity, stats.TailRMSRatio, stats.BarAlignment)
+	}
+	if got := classifyLoop(stats.Confidence); got != "loop" {
+		t.Errorf("loop_class: want %q, got %q (confidence %f)", "loop", got, stats.Confidence)
+	}
+}
+
+func TestComputeLoopStatsShortStabNotLoop(t *testing.T) {
+	t.Parallel()
+
+	// Short 0.3s synth stab / kick (duration < 0.8s)
+	sampleRate := 44100
+	duration := 0.3
+	frames := int(duration * float64(sampleRate))
+	data := make([]float64, frames)
+	for i := range data {
+		tSec := float64(i) / float64(sampleRate)
+		data[i] = math.Sin(2*math.Pi*150*tSec) * math.Exp(-tSec*20.0)
+	}
+
+	buffer := testPCMBuffer(sampleRate, data)
+	stats := computeLoopStats(buffer)
+
+	if stats.Confidence >= 0.35 {
+		t.Errorf("expected low confidence < 0.35 on short stab, got %f", stats.Confidence)
+	}
+	if got := classifyLoop(stats.Confidence); got != "oneshot" {
+		t.Errorf("loop_class: want %q, got %q (confidence %f)", "oneshot", got, stats.Confidence)
+	}
+}
+
+func TestLoopAnalyzerContainerMetadata(t *testing.T) {
+	t.Parallel()
+
+	analyzer, err := NewLoopAnalyzer(nil)
+	if err != nil {
+		t.Fatalf("NewLoopAnalyzer: %v", err)
+	}
+
+	buf := testPCMBuffer(44100, testSineBuffer(44100, 440, 44100))
+	ctx := ContextWithDecodedSample(context.Background(), "test.wav", zaudio.DecodeResult{
+		Buffer: buf,
+		Info:   zaudio.StreamInfo{SampleRate: 44100, Channels: 1, BitDepth: 16, Format: core.FormatWAV},
+	})
+
+	// 1. Explicit loop container metadata
+	resLoop, err := analyzer.Analyze(ctx, core.Sample{
+		Path: "test.wav",
+		Metadata: map[string]string{
+			"embedded.loop_class": "loop",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze loop: %v", err)
+	}
+	if resLoop.Metrics["loop_confidence"] != 1.0 {
+		t.Errorf("expected loop_confidence 1.0 from container metadata, got %f", resLoop.Metrics["loop_confidence"])
+	}
+	if resLoop.Attributes["loop_class"] != "loop" {
+		t.Errorf("expected loop_class 'loop', got %q", resLoop.Attributes["loop_class"])
+	}
+
+	// 2. Explicit oneshot container metadata
+	resOneshot, err := analyzer.Analyze(ctx, core.Sample{
+		Path: "test.wav",
+		Metadata: map[string]string{
+			"embedded.loop_class": "oneshot",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze oneshot: %v", err)
+	}
+	if resOneshot.Metrics["loop_confidence"] != 0.0 {
+		t.Errorf("expected loop_confidence 0.0 from container metadata, got %f", resOneshot.Metrics["loop_confidence"])
+	}
+	if resOneshot.Attributes["loop_class"] != "oneshot" {
+		t.Errorf("expected loop_class 'oneshot', got %q", resOneshot.Attributes["loop_class"])
 	}
 }

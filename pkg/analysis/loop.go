@@ -49,7 +49,30 @@ func (a *LoopAnalyzer) Analyze(ctx context.Context, sample core.Sample) (core.An
 		return core.AnalysisResult{}, fmt.Errorf("analyze loop for %q: %w", sample.Path, err)
 	}
 
+	// Check container loop flags (smpl, acid, basc)
+	containerLoopClass := ""
+	if sample.Metadata != nil {
+		if lc, ok := sample.Metadata["embedded.loop_class"]; ok && lc != "" {
+			containerLoopClass = lc
+		} else if lc, ok := sample.Metadata["loop_class"]; ok && lc != "" {
+			containerLoopClass = lc
+		}
+	}
+	if containerLoopClass == "" && sample.Path != "" {
+		if embedded, err := ReadEmbeddedMetadata(sample.Path); err == nil {
+			if lc, ok := embedded.Values["loop_class"]; ok && lc != "" {
+				containerLoopClass = lc
+			}
+		}
+	}
+
 	stats := computeLoopStats(decoded.Buffer)
+	switch containerLoopClass {
+	case "loop":
+		stats.Confidence = 1.0
+	case "oneshot":
+		stats.Confidence = 0.0
+	}
 
 	return core.AnalysisResult{
 		SampleID:    sample.ID,
@@ -61,6 +84,7 @@ func (a *LoopAnalyzer) Analyze(ctx context.Context, sample core.Sample) (core.An
 			"loop_tail_rms_ratio":      stats.TailRMSRatio,
 			"loop_periodicity_score":   stats.PeriodicityScore,
 			"loop_phase_alignment":     stats.PhaseAlignment,
+			"loop_bar_alignment":       stats.BarAlignment,
 			"loop_confidence":          stats.Confidence,
 		},
 		Attributes: map[string]string{
@@ -76,6 +100,7 @@ type LoopStats struct {
 	TailRMSRatio       float64
 	PeriodicityScore   float64
 	PhaseAlignment     float64
+	BarAlignment       float64
 	Confidence         float64
 }
 
@@ -85,22 +110,88 @@ func computeLoopStats(buffer zaudio.PCMBuffer) LoopStats {
 		return LoopStats{}
 	}
 
+	duration := buffer.Duration().Seconds()
 	beatStats := computeBeatStats(buffer)
 
 	boundary := computeBoundarySimilarity(mono, buffer.SampleRate)
 	tailRMS := computeTailRMSRatio(mono)
 	periodicity := computePeriodicityScore(mono, buffer.SampleRate, beatStats.BeatPeriodSeconds)
 	phase := computePhaseAlignment(mono, buffer.SampleRate)
+	barAlignment := computeBarAlignment(duration, beatStats)
 
-	confidence := clampUnit(boundary*0.35 + tailRMS*0.30 + periodicity*0.25 + phase*0.10)
+	// Decision model:
+	// A short sample (< 0.8s) cannot be a repeating musical bar loop.
+	// Similarly, if the tail has decayed to near-silence (tailRMS < 0.10),
+	// it is a one-shot event with a decay tail.
+	if duration < 0.8 || tailRMS < 0.10 {
+		conf := math.Min(0.25, tailRMS*2.0)
+		return LoopStats{
+			BoundarySimilarity: boundary,
+			TailRMSRatio:       tailRMS,
+			PeriodicityScore:   periodicity,
+			PhaseAlignment:     phase,
+			BarAlignment:       barAlignment,
+			Confidence:         conf,
+		}
+	}
+
+	// Seamless loop score (continuous drones, pads, synths, seamless basslines)
+	seamlessScore := 0.40*boundary + 0.35*tailRMS + 0.15*phase + 0.10*periodicity
+	// Rhythmic loop score (drum breaks, percussion loops, guitar grooves, gapped breaks)
+	rhythmicScore := 0.50*barAlignment + 0.30*periodicity + 0.20*tailRMS
+
+	loopEvidence := math.Max(seamlessScore, rhythmicScore)
+	blended := 0.60*loopEvidence + 0.40*(0.25*boundary+0.25*tailRMS+0.25*periodicity+0.25*barAlignment)
+	confidence := clampUnit(blended)
 
 	return LoopStats{
 		BoundarySimilarity: boundary,
 		TailRMSRatio:       tailRMS,
 		PeriodicityScore:   periodicity,
 		PhaseAlignment:     phase,
+		BarAlignment:       barAlignment,
 		Confidence:         confidence,
 	}
+}
+
+func computeBarAlignment(duration float64, beatStats BeatStats) float64 {
+	if duration < 0.8 {
+		return 0
+	}
+
+	// 1. If tempo was detected with high confidence, check alignment with detected BPM
+	if beatStats.Confidence >= 0.50 && beatStats.BPM > 0 {
+		beatPeriod := 60.0 / beatStats.BPM
+		numBeats := duration / beatPeriod
+
+		targets := []float64{2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64}
+		minDiff := math.MaxFloat64
+		for _, target := range targets {
+			diff := math.Abs(numBeats - target)
+			if diff < minDiff {
+				minDiff = diff
+			}
+		}
+
+		if minDiff <= 0.10 {
+			return clampUnit(1.0 - minDiff/0.10)
+		}
+	}
+
+	// 2. Grid tempo check: check if duration matches an exact integer BPM for standard bar counts
+	barCounts := []float64{2, 4, 8, 16, 32}
+	for _, bars := range barCounts {
+		impliedBPM := bars * 60.0 / duration
+		if impliedBPM >= 60.0 && impliedBPM <= 180.0 {
+			rounded := math.Round(impliedBPM)
+			diff := math.Abs(impliedBPM - rounded)
+			if diff < 0.02 {
+				return 0.85
+			}
+		}
+	}
+
+	return 0
 }
 
 func classifyLoop(confidence float64) string {
@@ -179,13 +270,19 @@ func computePeriodicityScore(mono []float64, sampleRate int, beatPeriodSeconds f
 	}
 
 	framesPerSec := float64(sampleRate) / float64(envWindowSize)
+	// Minimum lag corresponding to the fastest plausible musical tempo (~240 BPM = 0.25s)
+	minLagFrames := int(math.Ceil(0.25 * framesPerSec))
+	if minLagFrames < 4 {
+		minLagFrames = 4
+	}
+
 	maxScore := 0.0
 
 	if beatPeriodSeconds > 0 {
 		// Test 1, 2, 4, and 8 bar lengths (assuming 4 beats per bar).
 		for _, bars := range []float64{1, 2, 4, 8} {
 			lag := int(math.Round(bars * 4 * beatPeriodSeconds * framesPerSec))
-			if lag > 0 && lag < len(envelope) {
+			if lag >= minLagFrames && lag < len(envelope) {
 				if s := normalizedAutocorrelation(envelope, lag); s > maxScore {
 					maxScore = s
 				}
@@ -193,23 +290,15 @@ func computePeriodicityScore(mono []float64, sampleRate int, beatPeriodSeconds f
 		}
 	}
 
-	// Scan envelope-relative lags from 5% to 100% of the envelope length so
-	// we catch loops at any tempo and non-tempo-based cyclic patterns.
+	// Scan envelope-relative lags (from 20% to 100% of the envelope length),
+	// strictly bounded above minLagFrames to avoid smooth-envelope false positives.
 	const steps = 20
-	for i := 1; i <= steps; i++ {
+	for i := 4; i <= steps; i++ {
 		lag := int(math.Round(float64(i) / float64(steps) * float64(len(envelope))))
-		if lag > 0 && lag < len(envelope) {
+		if lag >= minLagFrames && lag < len(envelope) {
 			if s := normalizedAutocorrelation(envelope, lag); s > maxScore {
 				maxScore = s
 			}
-		}
-	}
-
-	// Also sweep small absolute lags (1 to steps) so very-short repeating
-	// patterns are not missed by the proportional scan above.
-	for lag := 1; lag <= steps && lag < len(envelope); lag++ {
-		if s := normalizedAutocorrelation(envelope, lag); s > maxScore {
-			maxScore = s
 		}
 	}
 

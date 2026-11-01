@@ -269,6 +269,126 @@ func TestServerProjectsClustersForVisualization(t *testing.T) {
 	}
 }
 
+func TestServerServesPersistedProjectionsWithoutRecomputing(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	sampleID := insertSample(t, repo, "tone.wav")
+
+	clusterID, err := repo.InsertCluster(context.Background(), core.Cluster{
+		Method: "kmeans",
+		Label:  "Cluster 1",
+	})
+	if err != nil {
+		t.Fatalf("InsertCluster: %v", err)
+	}
+	if err := repo.InsertClusterMember(context.Background(), db.ClusterMember{
+		ClusterID: clusterID,
+		SampleID:  sampleID,
+		Score:     1.0,
+	}); err != nil {
+		t.Fatalf("InsertClusterMember: %v", err)
+	}
+
+	// Persist known projection coordinate directly to sample_projections
+	if err := repo.UpsertSampleProjection(context.Background(), core.SampleProjection{
+		SampleID:  sampleID,
+		Method:    "tsne",
+		Namespace: "analysis",
+		X:         42.5,
+		Y:         -84.5,
+	}); err != nil {
+		t.Fatalf("UpsertSampleProjection: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clusters?projection=tsne", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload []struct {
+		X       float64
+		Y       float64
+		Members []struct {
+			X float64
+			Y float64
+		}
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload) != 1 || len(payload[0].Members) != 1 {
+		t.Fatalf("expected 1 cluster with 1 member, got %#v", payload)
+	}
+	if payload[0].Members[0].X != 42.5 || payload[0].Members[0].Y != -84.5 {
+		t.Fatalf("expected persisted coordinates (42.5, -84.5), got (%f, %f)",
+			payload[0].Members[0].X, payload[0].Members[0].Y)
+	}
+}
+
+func TestServerSerializesZeroZeroCoordinatesInJSON(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	sampleID := insertSample(t, repo, "tone.wav")
+
+	clusterID, err := repo.InsertCluster(context.Background(), core.Cluster{
+		Method: "kmeans",
+		Label:  "Cluster 1",
+	})
+	if err != nil {
+		t.Fatalf("InsertCluster: %v", err)
+	}
+	if err := repo.InsertClusterMember(context.Background(), db.ClusterMember{
+		ClusterID: clusterID,
+		SampleID:  sampleID,
+		Score:     1.0,
+	}); err != nil {
+		t.Fatalf("InsertClusterMember: %v", err)
+	}
+
+	// Persist 0.0, 0.0 coordinates
+	if err := repo.UpsertSampleProjection(context.Background(), core.SampleProjection{
+		SampleID:  sampleID,
+		Method:    "tsne",
+		Namespace: "analysis",
+		X:         0.0,
+		Y:         0.0,
+	}); err != nil {
+		t.Fatalf("UpsertSampleProjection: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clusters?projection=tsne", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	// Ensure "x":0 and "y":0 are present and not omitted
+	if !strings.Contains(body, `"x":0`) && !strings.Contains(body, `"x":0.0`) {
+		t.Fatalf("expected JSON body to contain '\"x\":0', got:\n%s", body)
+	}
+	if !strings.Contains(body, `"y":0`) && !strings.Contains(body, `"y":0.0`) {
+		t.Fatalf("expected JSON body to contain '\"y\":0', got:\n%s", body)
+	}
+}
+
 func TestListenAndServeVerboseLogsBindAndRequests(t *testing.T) {
 	t.Parallel()
 

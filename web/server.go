@@ -62,16 +62,16 @@ type sampleResponse struct {
 type clusterMemberResponse struct {
 	sampleResponse
 	Score float64 `json:"score,omitempty"`
-	X     float64 `json:"x,omitempty"`
-	Y     float64 `json:"y,omitempty"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
 }
 
 type clusterResponse struct {
 	core.Cluster
 	Samples []int64                 `json:"samples,omitempty"`
 	Members []clusterMemberResponse `json:"members,omitempty"`
-	X       float64                 `json:"x,omitempty"`
-	Y       float64                 `json:"y,omitempty"`
+	X       float64                 `json:"x"`
+	Y       float64                 `json:"y"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +288,19 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) projectClusterMembers(ctx context.Context, method string) (map[int64]cluster.ProjectionPoint, error) {
+	projections, err := s.repo.ListSampleProjections(ctx, method, "")
+	if err == nil && len(projections) > 0 {
+		pointBySample := make(map[int64]cluster.ProjectionPoint, len(projections))
+		for _, p := range projections {
+			pointBySample[p.SampleID] = cluster.ProjectionPoint{
+				SampleID: p.SampleID,
+				X:        p.X,
+				Y:        p.Y,
+			}
+		}
+		return pointBySample, nil
+	}
+
 	vectors, err := s.repo.ListFeatureVectors(ctx, "analysis")
 	if err != nil {
 		return nil, err
@@ -299,6 +312,13 @@ func (s *Server) projectClusterMembers(ctx context.Context, method string) (map[
 	pointBySample := make(map[int64]cluster.ProjectionPoint, len(points))
 	for _, point := range points {
 		pointBySample[point.SampleID] = point
+		_ = s.repo.UpsertSampleProjection(ctx, core.SampleProjection{
+			SampleID:  point.SampleID,
+			Method:    method,
+			Namespace: "analysis",
+			X:         point.X,
+			Y:         point.Y,
+		})
 	}
 	return pointBySample, nil
 }
@@ -424,7 +444,7 @@ func (s *Server) sampleResponseByID(ctx context.Context, sampleID int64, sampleC
 }
 
 func (s *Server) findClusterByID(ctx context.Context, id int64) (core.Cluster, []db.ClusterMember, bool, error) {
-	for _, method := range []string{"kmeans", "dbscan"} {
+	for _, method := range []string{"kmeans", "dbscan", "hdbscan"} {
 		clusters, err := s.repo.ListClustersByMethod(ctx, method)
 		if err != nil {
 			return core.Cluster{}, nil, false, err

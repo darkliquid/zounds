@@ -499,6 +499,14 @@ func TestClusterPersistsKMeansResult(t *testing.T) {
 		t.Fatalf("expected %d persisted clusters, got %d", len(result.Clusters), len(clusters))
 	}
 
+	projections, err := repo.ListSampleProjections(ctx, "pca", "")
+	if err != nil {
+		t.Fatalf("list persisted projections: %v", err)
+	}
+	if len(projections) != 6 {
+		t.Fatalf("expected 6 persisted sample projections, got %d", len(projections))
+	}
+
 	dry, err := pipeline.Cluster(ctx, repo, pipeline.ClusterOptions{K: 2, DryRun: true})
 	if err != nil {
 		t.Fatalf("Cluster dry run: %v", err)

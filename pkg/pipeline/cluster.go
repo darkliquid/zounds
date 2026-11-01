@@ -140,7 +140,8 @@ func Cluster(ctx context.Context, repo *db.Repository, opts ClusterOptions) (Clu
 		return ClusterResult{}, fmt.Errorf("unsupported clustering method %q", method)
 	}
 
-	if err := annotateClusterProjection(clusters, memberships, vectors, projection); err != nil {
+	points, err := annotateClusterProjection(clusters, memberships, vectors, projection)
+	if err != nil {
 		return ClusterResult{}, err
 	}
 
@@ -160,7 +161,16 @@ func Cluster(ctx context.Context, repo *db.Repository, opts ClusterOptions) (Clu
 		return result, nil
 	}
 
-	if err := persistClusterResult(ctx, repo, method, clusters, memberships); err != nil {
+	namespace := opts.Namespace
+	if namespace == "" {
+		if opts.Metric != "" {
+			namespace = opts.Metric
+		} else {
+			namespace = "acoustic"
+		}
+	}
+
+	if err := persistClusterResult(ctx, repo, method, projection, namespace, clusters, memberships, points); err != nil {
 		return ClusterResult{}, err
 	}
 
@@ -255,10 +265,10 @@ func autoLabelClusters(ctx context.Context, repo *db.Repository, clusters []core
 	return nil
 }
 
-func annotateClusterProjection(clusters []core.Cluster, memberships []cluster.Membership, vectors []core.FeatureVector, method string) error {
+func annotateClusterProjection(clusters []core.Cluster, memberships []cluster.Membership, vectors []core.FeatureVector, method string) ([]cluster.ProjectionPoint, error) {
 	points, err := cluster.Project2DByMethod(vectors, method)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pointBySample := make(map[int64]cluster.ProjectionPoint, len(points))
 	for _, point := range points {
@@ -289,10 +299,10 @@ func annotateClusterProjection(clusters []core.Cluster, memberships []cluster.Me
 			clusters[i].Parameters["projection_y"] = accums[i].y / accums[i].count
 		}
 	}
-	return nil
+	return points, nil
 }
 
-func persistClusterResult(ctx context.Context, repo *db.Repository, method string, clusters []core.Cluster, memberships []cluster.Membership) error {
+func persistClusterResult(ctx context.Context, repo *db.Repository, method, projectionMethod, namespace string, clusters []core.Cluster, memberships []cluster.Membership, points []cluster.ProjectionPoint) error {
 	if err := repo.DeleteClustersByMethod(ctx, method); err != nil {
 		return err
 	}
@@ -315,6 +325,18 @@ func persistClusterResult(ctx context.Context, repo *db.Repository, method strin
 			ClusterID: clusterIDs[membership.ClusterIndex],
 			SampleID:  membership.SampleID,
 			Score:     score,
+		}); err != nil {
+			return err
+		}
+	}
+
+	for _, pt := range points {
+		if err := repo.UpsertSampleProjection(ctx, core.SampleProjection{
+			SampleID:  pt.SampleID,
+			Method:    projectionMethod,
+			Namespace: namespace,
+			X:         pt.X,
+			Y:         pt.Y,
 		}); err != nil {
 			return err
 		}

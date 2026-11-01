@@ -86,9 +86,15 @@ type BPETokenizer struct {
 	bytesToUni     [256]rune
 	bosID          int32
 	eosID          int32
+	padID          int32
 	maxLen         int
 	addPrefixSpace bool
 	cache          sync.Map // string → []string
+}
+
+// PadID returns the token ID used for padding.
+func (t *BPETokenizer) PadID() int32 {
+	return t.padID
 }
 
 // NewBPETokenizer loads a tokenizer from the HuggingFace tokenizer.json file
@@ -150,6 +156,17 @@ func NewBPETokenizer(path string, maxLen int) (*BPETokenizer, error) {
 		}
 	}
 
+	// Default PAD ID for RoBERTa / CLAP is 1.
+	t.padID = 1
+
+	// Check vocabulary for standard pad token names.
+	for _, candidate := range []string{"<pad>", "[PAD]", "<|pad|>"} {
+		if id, ok := raw.Model.Vocab[candidate]; ok {
+			t.padID = id
+			break
+		}
+	}
+
 	// Fall back to common special token names in the vocabulary.
 	if t.bosID == 0 {
 		for _, candidate := range []string{"<|startoftext|>", "<s>", "[CLS]"} {
@@ -169,20 +186,20 @@ func NewBPETokenizer(path string, maxLen int) (*BPETokenizer, error) {
 	}
 
 	// Also check added_tokens for special token IDs by well-known names.
-	if t.bosID == 0 || t.eosID == 0 {
-		for _, at := range raw.AddedTokens {
-			if !at.Special {
-				continue
+	for _, at := range raw.AddedTokens {
+		if !at.Special {
+			continue
+		}
+		switch at.Content {
+		case "<pad>", "[PAD]", "<|pad|>":
+			t.padID = at.ID
+		case "<s>", "<|startoftext|>", "[CLS]":
+			if t.bosID == 0 {
+				t.bosID = at.ID
 			}
-			switch at.Content {
-			case "<s>", "<|startoftext|>", "[CLS]":
-				if t.bosID == 0 {
-					t.bosID = at.ID
-				}
-			case "</s>", "<|endoftext|>", "[SEP]":
-				if t.eosID == 0 {
-					t.eosID = at.ID
-				}
+		case "</s>", "<|endoftext|>", "[SEP]":
+			if t.eosID == 0 {
+				t.eosID = at.ID
 			}
 		}
 	}
@@ -205,10 +222,13 @@ func parseSpecialPair(raw []json.RawMessage) (string, int32, error) {
 }
 
 // Encode tokenises text using byte-level BPE and returns (input_ids,
-// attention_mask) slices of length t.maxLen.  Positions beyond the actual
-// token sequence are zero (pad id and mask).
+// attention_mask) slices of length t.maxLen. Positions beyond the actual
+// token sequence are filled with padID (and attention_mask is 0).
 func (t *BPETokenizer) Encode(text string) (ids, mask []int64) {
 	ids = make([]int64, t.maxLen)
+	for i := range ids {
+		ids[i] = int64(t.padID)
+	}
 	mask = make([]int64, t.maxLen)
 	pos := 0
 

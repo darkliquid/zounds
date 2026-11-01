@@ -8,8 +8,8 @@ import (
 func TestFeatureExtractorConfig_NumFrames(t *testing.T) {
 	cfg := DefaultFeatureExtractorConfig()
 	got := cfg.NumFrames()
-	// 1 + 480000/320 = 1501
-	want := 1501
+	// 1 + 480000/480 = 1001
+	want := 1001
 	if got != want {
 		t.Errorf("NumFrames() = %d, want %d", got, want)
 	}
@@ -53,11 +53,101 @@ func TestExtract_OutputShape(t *testing.T) {
 		t.Errorf("len(out) = %d, want %d", len(out), wantLen)
 	}
 
-	// Values should be normalised to [0, 1].
+	// Values should be raw dB (finite, not NaN or Inf).
 	for i, v := range out {
-		if v < -1e-5 || v > 1+1e-5 {
-			t.Errorf("out[%d] = %v out of [0,1]", i, v)
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			t.Errorf("out[%d] = %v is NaN/Inf", i, v)
 			break
+		}
+	}
+}
+
+func TestMelFilterBankSlaney_Shape(t *testing.T) {
+	filters := melFilterBankSlaney(64, 1024, 48000, 50, 14000)
+	if len(filters) != 64 {
+		t.Errorf("got %d filters, want 64", len(filters))
+	}
+	binCount := 1024/2 + 1
+	for i, f := range filters {
+		if len(f) != binCount {
+			t.Errorf("filter[%d] has len %d, want %d", i, len(f), binCount)
+		}
+		var maxW float64
+		for _, w := range f {
+			if w < 0 {
+				t.Errorf("filter[%d] has negative weight %f", i, w)
+			}
+			if w > maxW {
+				maxW = w
+			}
+		}
+		if maxW <= 0 {
+			t.Errorf("filter[%d] is all zeros", i)
+		}
+	}
+}
+
+func TestFeatureExtractor_RepeatPad(t *testing.T) {
+	cfg := FeatureExtractorConfig{
+		SampleRate:    16000,
+		NumMelBins:    16,
+		FFTWindowSize: 256,
+		HopLength:     80,
+		FreqMin:       50,
+		FreqMax:       8000,
+		MaxSamples:    16000, // 1 s
+	}
+	fe, err := NewFeatureExtractor(cfg)
+	if err != nil {
+		t.Fatalf("NewFeatureExtractor: %v", err)
+	}
+
+	// 100 samples short audio
+	shortAudio := make([]float64, 100)
+	for i := range shortAudio {
+		shortAudio[i] = float64(i) / 100.0
+	}
+
+	out, err := fe.Extract(shortAudio, 16000)
+	if err != nil {
+		t.Fatalf("Extract shortAudio: %v", err)
+	}
+	if len(out) != cfg.NumMelBins*cfg.NumFrames() {
+		t.Errorf("output len = %d, want %d", len(out), cfg.NumMelBins*cfg.NumFrames())
+	}
+}
+
+func TestFeatureExtractor_ConcurrentSafety(t *testing.T) {
+	cfg := FeatureExtractorConfig{
+		SampleRate:    16000,
+		NumMelBins:    16,
+		FFTWindowSize: 256,
+		HopLength:     80,
+		FreqMin:       50,
+		FreqMax:       8000,
+		MaxSamples:    1600,
+	}
+	fe, err := NewFeatureExtractor(cfg)
+	if err != nil {
+		t.Fatalf("NewFeatureExtractor: %v", err)
+	}
+
+	const goroutines = 10
+	errCh := make(chan error, goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(seed float64) {
+			samples := make([]float64, 1600)
+			for i := range samples {
+				samples[i] = math.Sin(2 * math.Pi * (200 + seed*50) * float64(i) / 16000)
+			}
+			_, err := fe.Extract(samples, 16000)
+			errCh <- err
+		}(float64(g))
+	}
+
+	for g := 0; g < goroutines; g++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent extract failed: %v", err)
 		}
 	}
 }

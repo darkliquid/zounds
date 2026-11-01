@@ -3,6 +3,7 @@ package clap
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"gonum.org/v1/gonum/dsp/fourier"
 
@@ -14,7 +15,7 @@ const (
 	DefaultSampleRate    = 48000
 	DefaultNumMelBins    = 64
 	DefaultFFTWindowSize = 1024
-	DefaultHopLength     = 320
+	DefaultHopLength     = 480
 	DefaultFreqMin       = 50.0
 	DefaultFreqMax       = 14000.0
 	DefaultMaxSamples    = 480000 // 10 s at 48 kHz
@@ -58,6 +59,7 @@ func (c FeatureExtractorConfig) NumFrames() int {
 // for input to the CLAP audio encoder.
 type FeatureExtractor struct {
 	cfg     FeatureExtractorConfig
+	mu      sync.Mutex
 	fft     *fourier.FFT
 	filters [][]float64
 	hannWin []float64
@@ -72,7 +74,7 @@ func NewFeatureExtractor(cfg FeatureExtractorConfig) (*FeatureExtractor, error) 
 
 	fftN := cfg.FFTWindowSize
 	fft := fourier.NewFFT(fftN)
-	filters := melFilterBankHTK(cfg.NumMelBins, fftN, cfg.SampleRate, cfg.FreqMin, cfg.FreqMax)
+	filters := melFilterBankSlaney(cfg.NumMelBins, fftN, cfg.SampleRate, cfg.FreqMin, cfg.FreqMax)
 
 	hannWin := make([]float64, fftN)
 	for i := range hannWin {
@@ -98,13 +100,16 @@ func (fe *FeatureExtractor) Extract(samples []float64, srcRate int) ([]float32, 
 	// 1. Resample to target sample rate.
 	mono := resampleLinear(samples, srcRate, fe.cfg.SampleRate)
 
-	// 2. Pad / truncate to exactly MaxSamples.
+	// 2. Repeat-pad or truncate to exactly MaxSamples.
 	if len(mono) > fe.cfg.MaxSamples {
 		mono = mono[:fe.cfg.MaxSamples]
 	} else if len(mono) < fe.cfg.MaxSamples {
-		padded := make([]float64, fe.cfg.MaxSamples)
-		copy(padded, mono)
-		mono = padded
+		repeated := make([]float64, fe.cfg.MaxSamples)
+		for filled := 0; filled < fe.cfg.MaxSamples; {
+			n := copy(repeated[filled:], mono)
+			filled += n
+		}
+		mono = repeated
 	}
 
 	// 3. Compute power log-mel spectrogram in [mel][frame] layout.
@@ -119,9 +124,12 @@ func (fe *FeatureExtractor) ExtractFromBuffer(buf zaudio.PCMBuffer) ([]float32, 
 }
 
 // computeLogMelSpectrogram does the heavy lifting: STFT with Hann window,
-// power spectrum, mel filterbank, dB scaling, and min-max normalisation.
+// power spectrum, mel filterbank, and dB scaling (raw dB fed to BatchNorm2d).
 // Output layout: [NumMelBins * NumFrames] in row-major [mel][frame] order.
 func (fe *FeatureExtractor) computeLogMelSpectrogram(samples []float64) []float32 {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+
 	cfg := fe.cfg
 	halfWin := cfg.FFTWindowSize / 2
 	numFrames := fe.cfg.NumFrames()
@@ -132,7 +140,7 @@ func (fe *FeatureExtractor) computeLogMelSpectrogram(samples []float64) []float3
 	padded := make([]float64, len(samples)+2*halfWin)
 	copy(padded[halfWin:], samples)
 
-	logMel := make([]float64, cfg.NumMelBins*numFrames)
+	logMel := make([]float32, cfg.NumMelBins*numFrames)
 	frame := make([]float64, cfg.FFTWindowSize)
 	binCount := cfg.FFTWindowSize/2 + 1
 	coeff := make([]complex128, binCount)
@@ -153,7 +161,7 @@ func (fe *FeatureExtractor) computeLogMelSpectrogram(samples []float64) []float3
 		// FFT and power spectrum.
 		coeff = fe.fft.Coefficients(coeff, frame)
 
-		// Mel filterbank + log scaling.
+		// Mel filterbank + log scaling in dB (raw dB fed to BatchNorm2d, no min-max).
 		for m, filter := range fe.filters {
 			var energy float64
 			for bin, weight := range filter {
@@ -164,31 +172,11 @@ func (fe *FeatureExtractor) computeLogMelSpectrogram(samples []float64) []float3
 				energy += (r*r + im*im) * weight
 			}
 			// dB scale: 10 * log10(max(energy, 1e-10))
-			logMel[m*numFrames+f] = 10 * math.Log10(math.Max(energy, 1e-10))
+			logMel[m*numFrames+f] = float32(10 * math.Log10(math.Max(energy, 1e-10)))
 		}
 	}
 
-	// Min-max normalise to [0, 1].
-	minV, maxV := logMel[0], logMel[0]
-	for _, v := range logMel {
-		if v < minV {
-			minV = v
-		}
-		if v > maxV {
-			maxV = v
-		}
-	}
-
-	out := make([]float32, len(logMel))
-	rangeV := maxV - minV
-	if rangeV < 1e-12 {
-		return out
-	}
-	invRange := float32(1.0 / rangeV)
-	for i, v := range logMel {
-		out[i] = float32(v-minV) * invRange
-	}
-	return out
+	return logMel
 }
 
 // resampleLinear resamples data from fromRate to toRate using linear
@@ -214,6 +202,80 @@ func resampleLinear(data []float64, fromRate, toRate int) []float64 {
 		out[i] = data[lo] + (data[lo+1]-data[lo])*(pos-float64(lo))
 	}
 	return out
+}
+
+// melFilterBankSlaney builds a triangular mel filterbank using the Slaney mel scale
+// and Slaney area normalisation (matching librosa mel(..., norm="slaney", mel_scale="slaney")
+// as used by HuggingFace ClapFeatureExtractor).
+// Returns filterCount filters, each of length fftSize/2+1.
+func melFilterBankSlaney(filterCount, fftSize, sampleRate int, fmin, fmax float64) [][]float64 {
+	binCount := fftSize/2 + 1
+	lowMel := clapHzToMelSlaney(fmin)
+	highMel := clapHzToMelSlaney(fmax)
+
+	melPoints := make([]float64, filterCount+2)
+	for i := range melPoints {
+		melPoints[i] = lowMel + (highMel-lowMel)*float64(i)/float64(filterCount+1)
+	}
+
+	freqPoints := make([]float64, len(melPoints))
+	for i, mel := range melPoints {
+		freqPoints[i] = clapMelToHzSlaney(mel)
+	}
+
+	filters := make([][]float64, filterCount)
+	fftBinWidth := float64(sampleRate) / float64(fftSize)
+
+	for m := 0; m < filterCount; m++ {
+		filter := make([]float64, binCount)
+		left, center, right := freqPoints[m], freqPoints[m+1], freqPoints[m+2]
+		enorm := 2.0 / (right - left)
+
+		for k := 0; k < binCount; k++ {
+			freq := float64(k) * fftBinWidth
+			if freq > left && freq < right {
+				var weight float64
+				if freq <= center {
+					weight = (freq - left) / (center - left)
+				} else {
+					weight = (right - freq) / (right - center)
+				}
+				filter[k] = weight * enorm
+			}
+		}
+		filters[m] = filter
+	}
+	return filters
+}
+
+// clapHzToMelSlaney converts Hz to Slaney mel (linear below 1000 Hz, logarithmic above).
+func clapHzToMelSlaney(hz float64) float64 {
+	const (
+		fMin      = 0.0
+		fSp       = 200.0 / 3.0
+		minLogHz  = 1000.0
+		minLogMel = (minLogHz - fMin) / fSp // 15.0
+	)
+	logStep := math.Log(6.4) / 27.0
+	if hz >= minLogHz {
+		return minLogMel + math.Log(hz/minLogHz)/logStep
+	}
+	return (hz - fMin) / fSp
+}
+
+// clapMelToHzSlaney converts Slaney mel to Hz.
+func clapMelToHzSlaney(mel float64) float64 {
+	const (
+		fMin      = 0.0
+		fSp       = 200.0 / 3.0
+		minLogHz  = 1000.0
+		minLogMel = (minLogHz - fMin) / fSp // 15.0
+	)
+	logStep := math.Log(6.4) / 27.0
+	if mel >= minLogMel {
+		return minLogHz * math.Exp(logStep*(mel-minLogMel))
+	}
+	return fMin + fSp*mel
 }
 
 // melFilterBankHTK builds a triangular mel filterbank using the HTK mel scale

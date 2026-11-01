@@ -23,6 +23,7 @@ func minimalTokenizerJSON(t *testing.T) string {
 		// Special tokens
 		"<|startoftext|>": 49406,
 		"<|endoftext|>":   49407,
+		"<pad>":           1,
 	}
 	merges := []string{
 		"a m",  // rank 0
@@ -117,14 +118,17 @@ func TestEncode_SequenceLength(t *testing.T) {
 	}
 }
 
-func TestEncode_PaddingIsZero(t *testing.T) {
+func TestEncode_PaddingUsesPadID(t *testing.T) {
 	path := minimalTokenizerJSON(t)
 	tok, err := NewBPETokenizer(path, 20)
 	if err != nil {
 		t.Fatalf("NewBPETokenizer: %v", err)
 	}
+	if tok.PadID() != 1 {
+		t.Errorf("PadID = %d, want 1", tok.PadID())
+	}
 	ids, mask := tok.Encode("a")
-	// Find the first zero in mask — that position and onwards must be zero.
+	// Find the first zero in mask — that position and onwards must be padID with mask 0.
 	firstPad := -1
 	for i, m := range mask {
 		if m == 0 {
@@ -137,8 +141,8 @@ func TestEncode_PaddingIsZero(t *testing.T) {
 			if mask[i] != 0 {
 				t.Errorf("mask[%d] = %d after pad start, want 0", i, mask[i])
 			}
-			if ids[i] != 0 {
-				t.Errorf("ids[%d] = %d after pad start, want 0", i, ids[i])
+			if ids[i] != int64(tok.PadID()) {
+				t.Errorf("ids[%d] = %d after pad start, want %d", i, ids[i], tok.PadID())
 			}
 		}
 	}

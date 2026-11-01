@@ -100,6 +100,9 @@ func TestLocalONNXRuntimeEndToEndWhenAssetsPresent(t *testing.T) {
 	if len(scores) != 2 {
 		t.Fatalf("expected 2 label scores, got %d", len(scores))
 	}
+	if scores[0].Label != "bass drum kick" {
+		t.Fatalf("expected top label 'bass drum kick', got %q", scores[0].Label)
+	}
 	for _, s := range scores {
 		if math.IsNaN(float64(s.Score)) || math.IsInf(float64(s.Score), 0) {
 			t.Fatalf("invalid score for %q: %v", s.Label, s.Score)

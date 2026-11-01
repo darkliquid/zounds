@@ -56,7 +56,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type sampleResponse struct {
 	core.Sample
-	Tags []core.Tag `json:"tags,omitempty"`
+	Tags     []core.Tag           `json:"tags,omitempty"`
+	Analysis *core.SampleAnalysis `json:"analysis,omitempty"`
 }
 
 type clusterMemberResponse struct {
@@ -119,10 +120,24 @@ func (s *Server) handleSamples(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	analysesBySample, err := s.repo.ListSampleAnalysesBySampleIDs(ctx, sampleIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
-	out := make([]sampleResponse, len(samples))
-	for i, sample := range samples {
-		out[i] = sampleResponse{Sample: sample, Tags: tagsBySample[sample.ID]}
+	facetFilter := parseFacetedFilter(r)
+	out := make([]sampleResponse, 0, len(samples))
+	for _, sample := range samples {
+		tags := tagsBySample[sample.ID]
+		var analysisPtr *core.SampleAnalysis
+		if a, ok := analysesBySample[sample.ID]; ok {
+			analysisPtr = &a
+		}
+		if !matchesFacetedFilter(sample, tags, analysisPtr, facetFilter) {
+			continue
+		}
+		out = append(out, sampleResponse{Sample: sample, Tags: tags, Analysis: analysisPtr})
 	}
 
 	writeJSON(w, http.StatusOK, out)
@@ -307,11 +322,20 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	analysesMap, err := s.repo.ListSampleAnalysesBySampleIDs(r.Context(), allSampleIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	sampleCache := make(map[int64]sampleResponse, len(allSampleIDs))
 	for _, id := range allSampleIDs {
 		if s, ok := samplesMap[id]; ok {
-			sampleCache[id] = sampleResponse{Sample: s, Tags: tagsMap[id]}
+			var aPtr *core.SampleAnalysis
+			if a, ok := analysesMap[id]; ok {
+				aPtr = &a
+			}
+			sampleCache[id] = sampleResponse{Sample: s, Tags: tagsMap[id], Analysis: aPtr}
 		}
 	}
 
@@ -479,9 +503,150 @@ func (s *Server) sampleResponseByID(ctx context.Context, sampleID int64, sampleC
 		return sampleResponse{}, err
 	}
 
-	response := sampleResponse{Sample: sample, Tags: tags}
+	var aPtr *core.SampleAnalysis
+	if a, err := s.repo.GetSampleAnalysis(ctx, sampleID); err == nil {
+		aPtr = &a
+	}
+
+	response := sampleResponse{Sample: sample, Tags: tags, Analysis: aPtr}
 	sampleCache[sampleID] = response
 	return response, nil
+}
+
+type facetedFilter struct {
+	BPMMin      *float64
+	BPMMax      *float64
+	Key         string
+	Chord       string
+	LoopClass   string
+	DurationMin *float64
+	DurationMax *float64
+}
+
+func parseFacetedFilter(r *http.Request) facetedFilter {
+	q := r.URL.Query()
+	f := facetedFilter{
+		Key:   strings.ToLower(strings.TrimSpace(q.Get("key"))),
+		Chord: strings.ToLower(strings.TrimSpace(q.Get("chord"))),
+	}
+
+	loopClass := strings.ToLower(strings.TrimSpace(q.Get("loop_class")))
+	if loopClass == "" {
+		loopClass = strings.ToLower(strings.TrimSpace(q.Get("type")))
+	}
+	f.LoopClass = loopClass
+
+	if v := strings.TrimSpace(q.Get("bpm_min")); v != "" {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			f.BPMMin = &val
+		}
+	}
+	if v := strings.TrimSpace(q.Get("bpm_max")); v != "" {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			f.BPMMax = &val
+		}
+	}
+	if v := strings.TrimSpace(q.Get("duration_min")); v != "" {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			f.DurationMin = &val
+		}
+	}
+	if v := strings.TrimSpace(q.Get("duration_max")); v != "" {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			f.DurationMax = &val
+		}
+	}
+
+	return f
+}
+
+func matchesFacetedFilter(sample core.Sample, tags []core.Tag, analysis *core.SampleAnalysis, f facetedFilter) bool {
+	if f.BPMMin != nil {
+		if analysis == nil || analysis.BPM == nil || *analysis.BPM < *f.BPMMin {
+			return false
+		}
+	}
+	if f.BPMMax != nil {
+		if analysis == nil || analysis.BPM == nil || *analysis.BPM > *f.BPMMax {
+			return false
+		}
+	}
+	if f.DurationMin != nil {
+		if analysis == nil || analysis.DurationSeconds == nil || *analysis.DurationSeconds < *f.DurationMin {
+			return false
+		}
+	}
+	if f.DurationMax != nil {
+		if analysis == nil || analysis.DurationSeconds == nil || *analysis.DurationSeconds > *f.DurationMax {
+			return false
+		}
+	}
+	if f.LoopClass != "" {
+		matched := false
+		if analysis != nil && analysis.LoopClass != nil && strings.EqualFold(*analysis.LoopClass, f.LoopClass) {
+			matched = true
+		}
+		if !matched {
+			targetTag := "articulation:" + f.LoopClass
+			for _, t := range tags {
+				if strings.EqualFold(t.NormalizedName, targetTag) || strings.EqualFold(t.NormalizedName, f.LoopClass) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if f.Key != "" {
+		matched := false
+		if analysis != nil {
+			keyStr := ""
+			if analysis.KeyTonic != nil {
+				keyStr = *analysis.KeyTonic
+				if analysis.KeyMode != nil {
+					keyStr += " " + *analysis.KeyMode
+				}
+			}
+			keyStr = strings.ToLower(keyStr)
+			if strings.Contains(keyStr, f.Key) {
+				matched = true
+			}
+		}
+		if !matched {
+			for _, t := range tags {
+				if strings.Contains(strings.ToLower(t.NormalizedName), f.Key) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if f.Chord != "" {
+		matched := false
+		if analysis != nil && analysis.Chord != nil {
+			if strings.Contains(strings.ToLower(*analysis.Chord), f.Chord) {
+				matched = true
+			}
+		}
+		if !matched {
+			for _, t := range tags {
+				if strings.Contains(strings.ToLower(t.NormalizedName), f.Chord) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (s *Server) findClusterByID(ctx context.Context, id int64) (core.Cluster, []db.ClusterMember, bool, error) {

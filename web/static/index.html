@@ -22,6 +22,41 @@
       </div>
     </header>
 
+    <div class="facet-controls">
+      <label>
+        Type
+        <select id="facet-type">
+          <option value="">All Types</option>
+          <option value="oneshot">One-shot</option>
+          <option value="loop">Loop</option>
+        </select>
+      </label>
+      <div class="range-group">
+        <span>BPM</span>
+        <div class="range-inputs">
+          <input id="facet-bpm-min" type="number" min="0" max="999" placeholder="Min">
+          <span>–</span>
+          <input id="facet-bpm-max" type="number" min="0" max="999" placeholder="Max">
+        </div>
+      </div>
+      <label>
+        Key
+        <input id="facet-key" type="text" placeholder="C major, Am...">
+      </label>
+      <label>
+        Chord
+        <input id="facet-chord" type="text" placeholder="Cmaj7, Dm...">
+      </label>
+      <div class="range-group">
+        <span>Duration (s)</span>
+        <div class="range-inputs">
+          <input id="facet-duration-min" type="number" min="0" step="0.1" placeholder="Min">
+          <span>–</span>
+          <input id="facet-duration-max" type="number" min="0" step="0.1" placeholder="Max">
+        </div>
+      </div>
+    </div>
+
     <section>
       <h2>Library</h2>
       <p id="summary" class="lede"></p>

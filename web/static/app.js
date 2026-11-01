@@ -2,6 +2,15 @@ const state = {
   browser: "search",
   tag: "",
   query: "",
+  facets: {
+    type: "",
+    bpmMin: "",
+    bpmMax: "",
+    key: "",
+    chord: "",
+    durationMin: "",
+    durationMax: "",
+  },
   projection: "tsne",
   samples: [],
   tags: [],
@@ -69,6 +78,27 @@ function sampleURL() {
   if (state.query) {
     params.set("q", state.query);
   }
+  if (state.facets.type) {
+    params.set("type", state.facets.type);
+  }
+  if (state.facets.bpmMin) {
+    params.set("bpm_min", state.facets.bpmMin);
+  }
+  if (state.facets.bpmMax) {
+    params.set("bpm_max", state.facets.bpmMax);
+  }
+  if (state.facets.key) {
+    params.set("key", state.facets.key);
+  }
+  if (state.facets.chord) {
+    params.set("chord", state.facets.chord);
+  }
+  if (state.facets.durationMin) {
+    params.set("duration_min", state.facets.durationMin);
+  }
+  if (state.facets.durationMax) {
+    params.set("duration_max", state.facets.durationMax);
+  }
   const query = params.toString();
   return query ? `/api/samples?${query}` : "/api/samples";
 }
@@ -94,18 +124,33 @@ function renderSummary() {
   summary.textContent = `${state.samples.length} sample${state.samples.length === 1 ? "" : "s"} shown`;
 
   const filter = document.getElementById("active-filter");
-  if (!state.tag && !state.query) {
-    filter.textContent = "";
-    filter.classList.add("hidden");
-    return;
-  }
-
   const parts = [];
   if (state.tag) {
     parts.push(`tag: ${state.tag}`);
   }
   if (state.query) {
     parts.push(`search: ${state.query}`);
+  }
+  if (state.facets.type) {
+    parts.push(`type: ${state.facets.type}`);
+  }
+  if (state.facets.bpmMin || state.facets.bpmMax) {
+    parts.push(`BPM: ${state.facets.bpmMin || "0"}-${state.facets.bpmMax || "∞"}`);
+  }
+  if (state.facets.key) {
+    parts.push(`key: ${state.facets.key}`);
+  }
+  if (state.facets.chord) {
+    parts.push(`chord: ${state.facets.chord}`);
+  }
+  if (state.facets.durationMin || state.facets.durationMax) {
+    parts.push(`duration: ${state.facets.durationMin || "0"}-${state.facets.durationMax || "∞"}s`);
+  }
+
+  if (parts.length === 0) {
+    filter.textContent = "";
+    filter.classList.add("hidden");
+    return;
   }
   filter.textContent = parts.join(" · ");
   filter.classList.remove("hidden");
@@ -397,9 +442,58 @@ function createSampleRow(sample, highlighted = false) {
   const meta = document.createElement("div");
   meta.className = "sample-meta";
 
+  const header = document.createElement("div");
+  header.className = "sample-header";
+
   const title = document.createElement("strong");
   title.textContent = getSampleFileName(sample);
-  meta.appendChild(title);
+  header.appendChild(title);
+
+  const badges = document.createElement("div");
+  badges.className = "badge-group";
+
+  const analysis = sample.analysis || sample.Analysis;
+  if (analysis) {
+    const loopClass = analysis.loop_class ?? analysis.LoopClass;
+    if (loopClass) {
+      const b = document.createElement("span");
+      b.className = `badge-meta badge-${loopClass.toLowerCase()}`;
+      b.textContent = loopClass;
+      badges.appendChild(b);
+    }
+    const bpm = analysis.bpm ?? analysis.BPM;
+    if (bpm != null) {
+      const b = document.createElement("span");
+      b.className = "badge-meta badge-bpm";
+      b.textContent = `${Math.round(bpm)} BPM`;
+      badges.appendChild(b);
+    }
+    const keyTonic = analysis.key_tonic ?? analysis.KeyTonic;
+    if (keyTonic) {
+      const keyMode = analysis.key_mode ?? analysis.KeyMode;
+      const b = document.createElement("span");
+      b.className = "badge-meta badge-key";
+      b.textContent = keyMode ? `${keyTonic} ${keyMode}` : keyTonic;
+      badges.appendChild(b);
+    }
+    const chord = analysis.chord ?? analysis.Chord;
+    if (chord) {
+      const b = document.createElement("span");
+      b.className = "badge-meta badge-chord";
+      b.textContent = chord;
+      badges.appendChild(b);
+    }
+    const dur = analysis.duration_seconds ?? analysis.DurationSeconds;
+    if (dur != null) {
+      const b = document.createElement("span");
+      b.className = "badge-meta badge-duration";
+      b.textContent = `${dur >= 10 ? dur.toFixed(1) : dur.toFixed(2)}s`;
+      badges.appendChild(b);
+    }
+  }
+
+  header.appendChild(badges);
+  meta.appendChild(header);
 
   const path = document.createElement("div");
   path.className = "sample-path";
@@ -443,6 +537,13 @@ function wireTabs() {
 async function main() {
   const search = document.getElementById("search");
   const projection = document.getElementById("projection");
+  const facetType = document.getElementById("facet-type");
+  const facetKey = document.getElementById("facet-key");
+  const facetChord = document.getElementById("facet-chord");
+  const facetBpmMin = document.getElementById("facet-bpm-min");
+  const facetBpmMax = document.getElementById("facet-bpm-max");
+  const facetDurationMin = document.getElementById("facet-duration-min");
+  const facetDurationMax = document.getElementById("facet-duration-max");
 
   wireTabs();
   bindClusterInteractions();
@@ -457,10 +558,45 @@ async function main() {
   });
   document.getElementById("reset-cluster-view").addEventListener("click", () => resetClusterViewport());
 
+  const onFacetChange = async () => {
+    state.facets.type = facetType.value;
+    state.facets.key = facetKey.value.trim();
+    state.facets.chord = facetChord.value.trim();
+    state.facets.bpmMin = facetBpmMin.value.trim();
+    state.facets.bpmMax = facetBpmMax.value.trim();
+    state.facets.durationMin = facetDurationMin.value.trim();
+    state.facets.durationMax = facetDurationMax.value.trim();
+    await refreshSamples();
+  };
+
+  facetType.addEventListener("change", onFacetChange);
+  facetKey.addEventListener("input", onFacetChange);
+  facetChord.addEventListener("input", onFacetChange);
+  facetBpmMin.addEventListener("input", onFacetChange);
+  facetBpmMax.addEventListener("input", onFacetChange);
+  facetDurationMin.addEventListener("input", onFacetChange);
+  facetDurationMax.addEventListener("input", onFacetChange);
+
   document.getElementById("clear-filters").addEventListener("click", async () => {
     state.tag = "";
     state.query = "";
+    state.facets = {
+      type: "",
+      bpmMin: "",
+      bpmMax: "",
+      key: "",
+      chord: "",
+      durationMin: "",
+      durationMax: "",
+    };
     search.value = "";
+    facetType.value = "";
+    facetKey.value = "";
+    facetChord.value = "";
+    facetBpmMin.value = "";
+    facetBpmMax.value = "";
+    facetDurationMin.value = "";
+    facetDurationMax.value = "";
     await refreshSamples();
     renderTags();
   });

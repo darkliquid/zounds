@@ -178,6 +178,53 @@ func TestSampleAnalysisUpsertRoundTrip(t *testing.T) {
 	}
 }
 
+func TestListSampleAnalysesBySampleIDs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := testRepo(t)
+
+	s1 := insertTestSample(t, repo, "/library/s1.wav")
+	s2 := insertTestSample(t, repo, "/library/s2.wav")
+	s3 := insertTestSample(t, repo, "/library/s3.wav")
+
+	bpm1 := 120.0
+	bpm2 := 140.0
+	if err := repo.UpsertSampleAnalysis(ctx, core.SampleAnalysis{SampleID: s1, BPM: &bpm1}); err != nil {
+		t.Fatalf("upsert s1: %v", err)
+	}
+	if err := repo.UpsertSampleAnalysis(ctx, core.SampleAnalysis{SampleID: s2, BPM: &bpm2}); err != nil {
+		t.Fatalf("upsert s2: %v", err)
+	}
+
+	// Empty sampleIDs returns empty map
+	emptyMap, err := repo.ListSampleAnalysesBySampleIDs(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListSampleAnalysesBySampleIDs nil: %v", err)
+	}
+	if len(emptyMap) != 0 {
+		t.Fatalf("expected empty map, got %d items", len(emptyMap))
+	}
+
+	// Query s1, s2, s3 (s3 has no analysis)
+	res, err := repo.ListSampleAnalysesBySampleIDs(ctx, []int64{s1, s2, s3})
+	if err != nil {
+		t.Fatalf("ListSampleAnalysesBySampleIDs: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("expected 2 analyses, got %d", len(res))
+	}
+	if res[s1].BPM == nil || *res[s1].BPM != 120.0 {
+		t.Fatalf("expected s1 BPM 120, got %#v", res[s1].BPM)
+	}
+	if res[s2].BPM == nil || *res[s2].BPM != 140.0 {
+		t.Fatalf("expected s2 BPM 140, got %#v", res[s2].BPM)
+	}
+	if _, ok := res[s3]; ok {
+		t.Fatalf("expected s3 not in result map")
+	}
+}
+
 func TestSampleProjectionUpsertAndList(t *testing.T) {
 	t.Parallel()
 

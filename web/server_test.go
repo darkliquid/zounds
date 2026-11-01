@@ -100,6 +100,112 @@ func TestServerFiltersSamplesByQuery(t *testing.T) {
 	}
 }
 
+func TestServerFiltersSamplesByMusicalFacets(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	ctx := context.Background()
+
+	id1 := insertSample(t, repo, "kick.wav")
+	id2 := insertSample(t, repo, "drumloop.wav")
+
+	bpm1 := 128.0
+	bpm2 := 174.0
+	dur1 := 0.5
+	dur2 := 4.0
+	tonic1 := "C"
+	tonic2 := "F#"
+	mode1 := "major"
+	mode2 := "minor"
+	chord1 := "Cmaj7"
+	chord2 := "F#m7"
+	loop1 := "oneshot"
+	loop2 := "loop"
+
+	if err := repo.UpsertSampleAnalysis(ctx, core.SampleAnalysis{
+		SampleID:        id1,
+		BPM:             &bpm1,
+		DurationSeconds: &dur1,
+		KeyTonic:        &tonic1,
+		KeyMode:         &mode1,
+		Chord:           &chord1,
+		LoopClass:       &loop1,
+	}); err != nil {
+		t.Fatalf("UpsertSampleAnalysis 1: %v", err)
+	}
+
+	if err := repo.UpsertSampleAnalysis(ctx, core.SampleAnalysis{
+		SampleID:        id2,
+		BPM:             &bpm2,
+		DurationSeconds: &dur2,
+		KeyTonic:        &tonic2,
+		KeyMode:         &mode2,
+		Chord:           &chord2,
+		LoopClass:       &loop2,
+	}); err != nil {
+		t.Fatalf("UpsertSampleAnalysis 2: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	type sampleResp struct {
+		ID       int64                `json:"id"`
+		FileName string               `json:"file_name"`
+		Analysis *core.SampleAnalysis `json:"analysis"`
+	}
+
+	fetch := func(query string) []sampleResp {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/samples?"+query, nil)
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for query %q, got %d", query, rec.Code)
+		}
+		var out []sampleResp
+		if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return out
+	}
+
+	// 1. Filter by type=loop
+	loops := fetch("type=loop")
+	if len(loops) != 1 || loops[0].FileName != "drumloop.wav" {
+		t.Fatalf("expected [drumloop.wav] for type=loop, got %#v", loops)
+	}
+	if loops[0].Analysis == nil || loops[0].Analysis.LoopClass == nil || *loops[0].Analysis.LoopClass != "loop" {
+		t.Fatalf("expected analysis to be populated with loop_class=loop, got %#v", loops[0].Analysis)
+	}
+
+	// 2. Filter by BPM range [120, 130]
+	tempoMatched := fetch("bpm_min=120&bpm_max=130")
+	if len(tempoMatched) != 1 || tempoMatched[0].FileName != "kick.wav" {
+		t.Fatalf("expected [kick.wav] for bpm range, got %#v", tempoMatched)
+	}
+
+	// 3. Filter by key
+	keyMatched := fetch("key=c+major")
+	if len(keyMatched) != 1 || keyMatched[0].FileName != "kick.wav" {
+		t.Fatalf("expected [kick.wav] for key=c+major, got %#v", keyMatched)
+	}
+
+	// 4. Filter by chord
+	chordMatched := fetch("chord=f%23m")
+	if len(chordMatched) != 1 || chordMatched[0].FileName != "drumloop.wav" {
+		t.Fatalf("expected [drumloop.wav] for chord=f#m, got %#v", chordMatched)
+	}
+
+	// 5. Filter by duration
+	durMatched := fetch("duration_min=1.0")
+	if len(durMatched) != 1 || durMatched[0].FileName != "drumloop.wav" {
+		t.Fatalf("expected [drumloop.wav] for duration_min=1.0, got %#v", durMatched)
+	}
+}
+
 func TestServerStreamsSampleAudio(t *testing.T) {
 	t.Parallel()
 

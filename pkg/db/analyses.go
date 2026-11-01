@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/darkliquid/zounds/pkg/core"
 )
@@ -141,6 +142,82 @@ func (r *Repository) GetSampleAnalysis(ctx context.Context, sampleID int64) (cor
 	}
 
 	return analysis, nil
+}
+
+// ListSampleAnalysesBySampleIDs retrieves sample analyses for multiple sample IDs in chunks.
+func (r *Repository) ListSampleAnalysesBySampleIDs(ctx context.Context, sampleIDs []int64) (map[int64]core.SampleAnalysis, error) {
+	result := make(map[int64]core.SampleAnalysis, len(sampleIDs))
+	if len(sampleIDs) == 0 {
+		return result, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(sampleIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(sampleIDs) {
+			end = len(sampleIDs)
+		}
+		chunk := sampleIDs[i:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for j, id := range chunk {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		query := fmt.Sprintf(`
+			SELECT
+				sample_id,
+				duration_seconds,
+				sample_rate,
+				channels,
+				bit_depth,
+				bpm,
+				bpm_confidence,
+				key_tonic,
+				key_mode,
+				key_confidence,
+				chord,
+				chord_confidence,
+				pitch_hz,
+				midi_note,
+				cents_offset,
+				pitch_confidence,
+				loop_class,
+				loop_confidence,
+				lufs_integrated,
+				true_peak_dbtp,
+				analyzed_modified_at,
+				metrics_json,
+				attributes_json,
+				created_at,
+				updated_at
+			FROM sample_analyses
+			WHERE sample_id IN (%s);
+		`, strings.Join(placeholders, ","))
+
+		rows, err := r.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("list sample analyses by sample ids: %w", err)
+		}
+
+		for rows.Next() {
+			analysis, err := scanSampleAnalysis(rows)
+			if err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan sample analysis: %w", err)
+			}
+			result[analysis.SampleID] = analysis
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterate sample analyses: %w", err)
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
 }
 
 func (r *Repository) DeleteSampleAnalysis(ctx context.Context, sampleID int64) error {

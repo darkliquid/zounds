@@ -117,5 +117,17 @@ func NormalizeTagName(name string) string {
 	name = strings.TrimSpace(strings.ToLower(name))
 	name = strings.ReplaceAll(name, "_", " ")
 	name = strings.ReplaceAll(name, "-", " ")
-	return strings.Join(strings.Fields(name), " ")
+	if !strings.Contains(name, ":") {
+		return strings.Join(strings.Fields(name), " ")
+	}
+
+	parts := strings.Split(name, ":")
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		segment := strings.Join(strings.Fields(part), " ")
+		if segment != "" {
+			cleaned = append(cleaned, segment)
+		}
+	}
+	return strings.Join(cleaned, ":")
 }

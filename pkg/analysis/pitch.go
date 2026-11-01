@@ -78,62 +78,146 @@ type PitchStats struct {
 
 func computePitch(buffer zaudio.PCMBuffer) PitchStats {
 	mono := mixDownMono(buffer)
-	if len(mono) < 2 || buffer.SampleRate <= 0 {
+	if len(mono) < 64 || buffer.SampleRate <= 0 {
 		return PitchStats{}
 	}
 
-	segment := strongestWindow(mono, 4096, 1024)
-	if len(segment) < 2 {
+	// Check for silence
+	var totalEnergy float64
+	for _, s := range mono {
+		totalEnergy += s * s
+	}
+	if totalEnergy < 1e-9 {
 		return PitchStats{}
 	}
 
-	minLag := int(float64(buffer.SampleRate) / 2000.0)
-	maxLag := int(float64(buffer.SampleRate) / 50.0)
-	if minLag < 1 {
-		minLag = 1
-	}
-	if maxLag >= len(segment) {
-		maxLag = len(segment) - 1
+	// Pitch range: 24 Hz (covers 25 Hz sub-bass / 808s) to 4200 Hz (covers 4000 Hz)
+	maxLag := int(float64(buffer.SampleRate) / 24.0)
+	minLag := int(float64(buffer.SampleRate) / 4200.0)
+	if minLag < 2 {
+		minLag = 2
 	}
 
+	// Integration window W: ideally ~2048 samples (or adapted for shorter audio)
+	desiredW := 2048
+	neededLen := desiredW + maxLag
+
+	segment := mono
+	if len(mono) > neededLen {
+		segment = strongestWindow(mono, neededLen, neededLen/4)
+	}
+
+	W := desiredW
+	if len(segment) < W+maxLag {
+		W = len(segment) / 2
+		if W < 16 {
+			return PitchStats{}
+		}
+		maxLag = len(segment) - W
+	}
+	if maxLag <= minLag {
+		return PitchStats{}
+	}
+
+	// YIN pitch estimation algorithm
+	d := make([]float64, maxLag+2)
+	dPrime := make([]float64, maxLag+2)
+	dPrime[0] = 1.0
+
+	var runningSum float64
 	bestLag := 0
-	bestScore := 0.0
-	scores := make([]float64, maxLag+1)
-	for lag := minLag; lag <= maxLag; lag++ {
-		score := normalizedAutocorrelation(segment, lag)
-		scores[lag] = score
-		if score > bestScore {
-			bestScore = score
-			bestLag = lag
+	tauFound := false
+	const dipThreshold = 0.15
+
+	segA := segment[:W]
+	for tau := 1; tau <= maxLag; tau++ {
+		segB := segment[tau : tau+W]
+		var sum float64
+		for j := range segA {
+			diff := segA[j] - segB[j]
+			sum += diff * diff
+		}
+		d[tau] = sum
+		runningSum += sum
+
+		if runningSum == 0 {
+			dPrime[tau] = 1.0
+		} else {
+			dPrime[tau] = d[tau] / (runningSum / float64(tau))
+		}
+
+		if tau >= minLag {
+			if !tauFound && dPrime[tau] < dipThreshold {
+				tauFound = true
+			}
+			if tauFound && tau > minLag && dPrime[tau] > dPrime[tau-1] {
+				bestLag = tau - 1
+				break
+			}
 		}
 	}
 
-	threshold := bestScore * 0.9
-	for lag := minLag + 1; lag < maxLag; lag++ {
-		score := scores[lag]
-		if score < threshold {
-			continue
-		}
-		if score >= scores[lag-1] && score >= scores[lag+1] {
-			bestLag = lag
-			bestScore = score
-			break
+	// If no dip was below dipThreshold, find global minimum across valid lags
+	if bestLag == 0 {
+		minVal := math.MaxFloat64
+		for t := minLag; t <= maxLag; t++ {
+			if dPrime[t] < minVal {
+				minVal = dPrime[t]
+				bestLag = t
+			}
 		}
 	}
 
-	if bestLag == 0 || bestScore <= 0 {
+	if bestLag < minLag || bestLag > maxLag {
 		return PitchStats{}
 	}
 
-	frequency := float64(buffer.SampleRate) / float64(bestLag)
+	// Parabolic lag interpolation to eliminate integer-lag quantization error
+	delta := 0.0
+	y2 := dPrime[bestLag]
+	yMin := y2
+
+	if bestLag > minLag && bestLag < maxLag && dPrime[bestLag+1] > 0 {
+		y1 := dPrime[bestLag-1]
+		y3 := dPrime[bestLag+1]
+		denom := 2.0 * (y1 - 2.0*y2 + y3)
+		if math.Abs(denom) > 1e-12 {
+			delta = (y1 - y3) / denom
+			delta = math.Max(-0.5, math.Min(0.5, delta))
+			yMin = y2 - (y1-y3)*delta/4.0
+		}
+	}
+
+	if yMin < 0 {
+		yMin = 0
+	}
+	confidence := math.Max(0.0, math.Min(1.0, 1.0-yMin))
+
+	const confidenceThreshold = 0.60
+	if confidence < confidenceThreshold {
+		return PitchStats{
+			Confidence: confidence,
+		}
+	}
+
+	tauInterp := float64(bestLag) + delta
+	if tauInterp <= 0 {
+		return PitchStats{Confidence: confidence}
+	}
+
+	frequency := float64(buffer.SampleRate) / tauInterp
+	if frequency < 20.0 || frequency > 5000.0 {
+		return PitchStats{Confidence: confidence}
+	}
+
 	midi := 69.0 + 12.0*math.Log2(frequency/440.0)
 	rounded := math.Round(midi)
-	cents := (midi - rounded) * 100
+	cents := (midi - rounded) * 100.0
 
 	return PitchStats{
 		FrequencyHz: frequency,
 		MIDINote:    midi,
-		Confidence:  bestScore,
+		Confidence:  confidence,
 		CentsOffset: cents,
 		NoteName:    midiNoteName(int(rounded)),
 	}

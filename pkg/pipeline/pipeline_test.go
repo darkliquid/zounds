@@ -510,3 +510,73 @@ func TestAutoTagConsumesPersistedAnalysisWithoutReDecode(t *testing.T) {
 	}
 }
 
+func TestCombineAnalysisResultsPreservesEmbeddedPriors(t *testing.T) {
+	t.Parallel()
+
+	metaResult := core.AnalysisResult{
+		SampleID: 42,
+		Analyzer: "metadata",
+		Attributes: map[string]string{
+			"embedded.bpm":        "174.00",
+			"embedded.key":        "F# minor",
+			"embedded.tonic":      "F#",
+			"embedded.mode":       "minor",
+			"embedded.loop_class": "loop",
+			"embedded.midi_note":  "60",
+			"embedded.note_name":  "C4",
+		},
+	}
+
+	beatResult := core.AnalysisResult{
+		SampleID: 42,
+		Analyzer: "beat",
+		Metrics: map[string]float64{
+			"tempo_bpm":        120.0,
+			"tempo_confidence": 0.45,
+		},
+	}
+
+	keyResult := core.AnalysisResult{
+		SampleID: 42,
+		Analyzer: "key",
+		Metrics: map[string]float64{
+			"key_confidence": 0.35,
+		},
+		Attributes: map[string]string{
+			"key":   "C major",
+			"tonic": "C",
+			"mode":  "major",
+		},
+	}
+
+	loopResult := core.AnalysisResult{
+		SampleID: 42,
+		Analyzer: "loop",
+		Metrics: map[string]float64{
+			"loop_confidence": 0.20,
+		},
+		Attributes: map[string]string{
+			"loop_class": "oneshot",
+		},
+	}
+
+	combined := pipeline.CombineAnalysisResults(42, metaResult, beatResult, keyResult, loopResult)
+
+	if combined.Metrics["tempo_bpm"] != 174.0 || combined.Metrics["tempo_confidence"] != 1.0 {
+		t.Errorf("expected prior bpm 174.0 @ 1.0, got %f @ %f", combined.Metrics["tempo_bpm"], combined.Metrics["tempo_confidence"])
+	}
+	if combined.Attributes["key"] != "F# minor" || combined.Attributes["tonic"] != "F#" || combined.Attributes["mode"] != "minor" {
+		t.Errorf("expected prior key 'F# minor', got %q", combined.Attributes["key"])
+	}
+	if combined.Metrics["key_confidence"] != 1.0 {
+		t.Errorf("expected key_confidence 1.0, got %f", combined.Metrics["key_confidence"])
+	}
+	if combined.Attributes["loop_class"] != "loop" || combined.Metrics["loop_confidence"] != 1.0 {
+		t.Errorf("expected loop_class 'loop' @ 1.0, got %q @ %f", combined.Attributes["loop_class"], combined.Metrics["loop_confidence"])
+	}
+	if combined.Metrics["midi_note"] != 60 || combined.Attributes["note_name"] != "C4" || combined.Metrics["confidence"] != 1.0 {
+		t.Errorf("expected midi_note 60 / C4 @ 1.0, got note=%f name=%q conf=%f", combined.Metrics["midi_note"], combined.Attributes["note_name"], combined.Metrics["confidence"])
+	}
+}
+
+

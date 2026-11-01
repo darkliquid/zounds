@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"sync"
 
 	"github.com/darkliquid/zounds/pkg/analysis"
@@ -142,8 +143,14 @@ func RunAnalyzers(ctx context.Context, sample core.Sample, analyzers []core.Anal
 }
 
 // CombineAnalysisResults merges analyzer results into one result with
-// flattened metrics and merged attributes.
+// flattened metrics and merged attributes. Any embedded metadata priors
+// (e.g. from WAV smpl/acid/bext/INFO chunks or AIFF basc) take precedence over
+// heuristic DSP estimates for tempo, key, pitch, and loop classification.
 func CombineAnalysisResults(sampleID int64, results ...core.AnalysisResult) core.AnalysisResult {
+	if len(results) == 0 {
+		return core.AnalysisResult{SampleID: sampleID, Analyzer: "combined", Version: "0.1.0"}
+	}
+
 	combined := core.AnalysisResult{
 		SampleID:    sampleID,
 		Analyzer:    "combined",
@@ -156,6 +163,47 @@ func CombineAnalysisResults(sampleID int64, results ...core.AnalysisResult) core
 	for _, result := range results {
 		for key, value := range result.Attributes {
 			combined.Attributes[key] = value
+		}
+	}
+
+	// Apply high-confidence priors from embedded metadata
+	if bpmStr, ok := combined.Attributes["embedded.bpm"]; ok && bpmStr != "" {
+		if bpm, err := strconv.ParseFloat(bpmStr, 64); err == nil && bpm > 0 {
+			combined.Metrics["tempo_bpm"] = bpm
+			combined.Metrics["tempo_confidence"] = 1.0
+			combined.Attributes["tempo_bpm"] = fmt.Sprintf("%.2f", bpm)
+		}
+	}
+	if key, ok := combined.Attributes["embedded.key"]; ok && key != "" {
+		combined.Attributes["key"] = key
+		if tonic, ok := combined.Attributes["embedded.tonic"]; ok && tonic != "" {
+			combined.Attributes["tonic"] = tonic
+		}
+		if mode, ok := combined.Attributes["embedded.mode"]; ok && mode != "" {
+			combined.Attributes["mode"] = mode
+		}
+		combined.Metrics["key_confidence"] = 1.0
+	}
+	if loopClass, ok := combined.Attributes["embedded.loop_class"]; ok && loopClass != "" {
+		combined.Attributes["loop_class"] = loopClass
+		switch loopClass {
+		case "loop":
+			combined.Metrics["loop_confidence"] = 1.0
+		case "oneshot":
+			combined.Metrics["loop_confidence"] = 0.0
+		}
+	}
+	if midiStr, ok := combined.Attributes["embedded.midi_note"]; ok && midiStr != "" {
+		if note, err := strconv.Atoi(midiStr); err == nil && note >= 0 && note <= 127 {
+			combined.Metrics["midi_note"] = float64(note)
+			combined.Metrics["confidence"] = 1.0
+			if noteName, ok := combined.Attributes["embedded.note_name"]; ok && noteName != "" {
+				combined.Attributes["note_name"] = noteName
+			}
+			hz := analysis.MidiToHz(note)
+			if hz > 0 {
+				combined.Metrics["frequency_hz"] = hz
+			}
 		}
 	}
 

@@ -2,13 +2,9 @@ package analysis
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"strings"
+	"strconv"
 	"time"
-
-	"github.com/dhowden/tag"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/core"
@@ -102,22 +98,65 @@ func (a *MetadataAnalyzer) Analyze(ctx context.Context, sample core.Sample) (cor
 		attributes["embedded.picture"] = "true"
 	}
 
+	metrics := map[string]float64{
+		"sample_rate":      float64(metadata.SampleRate),
+		"channels":         float64(metadata.Channels),
+		"bit_depth":        float64(metadata.BitDepth),
+		"bitrate":          float64(metadata.Bitrate),
+		"frames":           float64(metadata.Frames),
+		"duration_seconds": metadata.Duration.Seconds(),
+		"size_bytes":       float64(metadata.SizeBytes),
+		"embedded_fields":  float64(len(embedded.Values)),
+	}
+
+	// Apply embedded metadata as high-confidence priors
+	if bpmStr, ok := embedded.Values["bpm"]; ok {
+		if bpm, err := strconv.ParseFloat(bpmStr, 64); err == nil && bpm > 0 {
+			metrics["tempo_bpm"] = bpm
+			metrics["tempo_confidence"] = 1.0
+			attributes["tempo_bpm"] = fmt.Sprintf("%.2f", bpm)
+		}
+	}
+	if key, ok := embedded.Values["key"]; ok && key != "" {
+		attributes["key"] = key
+		if tonic, ok := embedded.Values["tonic"]; ok {
+			attributes["tonic"] = tonic
+		}
+		if mode, ok := embedded.Values["mode"]; ok {
+			attributes["mode"] = mode
+		}
+		metrics["key_confidence"] = 1.0
+	}
+	if loopClass, ok := embedded.Values["loop_class"]; ok && loopClass != "" {
+		attributes["loop_class"] = loopClass
+		switch loopClass {
+		case "loop":
+			metrics["loop_confidence"] = 1.0
+		case "oneshot":
+			metrics["loop_confidence"] = 0.0
+		}
+	}
+	if midiStr, ok := embedded.Values["midi_note"]; ok {
+		if note, err := strconv.Atoi(midiStr); err == nil && note >= 0 && note <= 127 {
+			metrics["midi_note"] = float64(note)
+			metrics["confidence"] = 1.0
+			if noteName, ok := embedded.Values["note_name"]; ok {
+				attributes["note_name"] = noteName
+			}
+			hz := MidiToHz(note)
+			if hz > 0 {
+				metrics["frequency_hz"] = hz
+			}
+		}
+	}
+
 	return core.AnalysisResult{
 		SampleID:    sample.ID,
 		Analyzer:    a.Name(),
 		Version:     a.Version(),
 		CompletedAt: time.Now().UTC(),
-		Metrics: map[string]float64{
-			"sample_rate":      float64(metadata.SampleRate),
-			"channels":         float64(metadata.Channels),
-			"bit_depth":        float64(metadata.BitDepth),
-			"bitrate":          float64(metadata.Bitrate),
-			"frames":           float64(metadata.Frames),
-			"duration_seconds": metadata.Duration.Seconds(),
-			"size_bytes":       float64(metadata.SizeBytes),
-			"embedded_fields":  float64(len(embedded.Values)),
-		},
-		Attributes: attributes,
+		Metrics:     metrics,
+		Attributes:  attributes,
 	}, nil
 }
 
@@ -137,63 +176,4 @@ func channelLayout(channels int) string {
 	default:
 		return fmt.Sprintf("%d-channel", channels)
 	}
-}
-
-func ReadEmbeddedMetadata(path string) (EmbeddedMetadata, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return EmbeddedMetadata{}, fmt.Errorf("open file: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	metadata, err := tag.ReadFrom(file)
-	if err != nil {
-		if errors.Is(err, tag.ErrNoTagsFound) {
-			return EmbeddedMetadata{}, nil
-		}
-		return EmbeddedMetadata{}, err
-	}
-
-	trackNumber, trackTotal := metadata.Track()
-	discNumber, discTotal := metadata.Disc()
-
-	values := map[string]string{}
-	addMetadataValue(values, "title", metadata.Title())
-	addMetadataValue(values, "album", metadata.Album())
-	addMetadataValue(values, "artist", metadata.Artist())
-	addMetadataValue(values, "album_artist", metadata.AlbumArtist())
-	addMetadataValue(values, "composer", metadata.Composer())
-	addMetadataValue(values, "genre", metadata.Genre())
-	addMetadataValue(values, "comment", metadata.Comment())
-	addMetadataValue(values, "lyrics", metadata.Lyrics())
-	if metadata.Year() > 0 {
-		values["year"] = fmt.Sprintf("%d", metadata.Year())
-	}
-	if trackNumber > 0 {
-		values["track"] = fmt.Sprintf("%d", trackNumber)
-	}
-	if trackTotal > 0 {
-		values["track_total"] = fmt.Sprintf("%d", trackTotal)
-	}
-	if discNumber > 0 {
-		values["disc"] = fmt.Sprintf("%d", discNumber)
-	}
-	if discTotal > 0 {
-		values["disc_total"] = fmt.Sprintf("%d", discTotal)
-	}
-
-	return EmbeddedMetadata{
-		Format:     string(metadata.Format()),
-		FileType:   string(metadata.FileType()),
-		Values:     values,
-		HasPicture: metadata.Picture() != nil,
-	}, nil
-}
-
-func addMetadataValue(values map[string]string, key, value string) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return
-	}
-	values[key] = value
 }

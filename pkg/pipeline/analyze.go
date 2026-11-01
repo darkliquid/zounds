@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/darkliquid/zounds/pkg/analysis"
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
+	"github.com/darkliquid/zounds/pkg/clap"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
 )
@@ -36,6 +38,13 @@ type AnalyzeOptions struct {
 	// OnUnchanged receives samples skipped because their analysis is current
 	// when SkipUnchanged is set.
 	OnUnchanged func(sample core.Sample)
+	// CLAPModelDir specifies the directory containing CLAP ONNX models and tokenizer.json.
+	// When provided, 512-D CLAP embeddings are extracted and persisted under namespace "clap".
+	CLAPModelDir string
+	// CLAPLib specifies the path to the ONNX Runtime shared library (empty uses default).
+	CLAPLib string
+	// CLAPModel allows passing a pre-loaded CLAP model directly.
+	CLAPModel *clap.Model
 }
 
 // AnalyzeSummary reports the outcome of a batch analysis run.
@@ -51,6 +60,19 @@ func AnalyzeSamples(ctx context.Context, repo *db.Repository, samples []core.Sam
 	if repo == nil {
 		return AnalyzeSummary{}, errors.New("pipeline: nil repository")
 	}
+
+	var clapModel *clap.Model
+	if opts.CLAPModel != nil {
+		clapModel = opts.CLAPModel
+	} else if strings.TrimSpace(opts.CLAPModelDir) != "" {
+		m, err := loadCLAPModel(opts.CLAPModelDir, opts.CLAPLib)
+		if err != nil {
+			return AnalyzeSummary{}, fmt.Errorf("load CLAP model: %w", err)
+		}
+		clapModel = m
+		defer func() { _ = clapModel.Close() }()
+	}
+	opts.CLAPModel = clapModel
 
 	unchanged := 0
 	if opts.SkipUnchanged {
@@ -129,7 +151,7 @@ func analyzeSamplesWorkerPool(ctx context.Context, repo *db.Repository, samples 
 			defer wg.Done()
 			for sample := range jobs {
 				verbosef(opts.Logger, "analyzing sample %s", sample.Path)
-				output, err := AnalyzeSample(ctx, sample)
+				output, err := AnalyzeSampleWithCLAP(ctx, sample, opts.CLAPModel)
 				if err != nil {
 					if opts.SkipUndecodable && zaudio.IsDecodeError(err) {
 						summaryMu.Lock()
@@ -170,11 +192,17 @@ func analyzeSamplesWorkerPool(ctx context.Context, repo *db.Repository, samples 
 	return summary, firstErr
 }
 
-// PersistAnalysisOutput stores the feature vector and the flattened rich
-// analysis (metrics and attributes) for a sample.
+// PersistAnalysisOutput stores the primary feature vector, any extra feature
+// vectors (such as 512-D CLAP embeddings), and the flattened rich analysis
+// (metrics and attributes) for a sample.
 func PersistAnalysisOutput(ctx context.Context, repo *db.Repository, sample core.Sample, output AnalysisOutput) error {
 	if _, err := repo.ReplaceFeatureVector(ctx, output.Vector); err != nil {
 		return err
+	}
+	for _, fv := range output.FeatureVectors {
+		if _, err := repo.ReplaceFeatureVector(ctx, fv); err != nil {
+			return err
+		}
 	}
 
 	combined := CombineAnalysisResults(sample.ID, output.Results...)
@@ -183,6 +211,14 @@ func PersistAnalysisOutput(ctx context.Context, repo *db.Repository, sample core
 	}
 
 	return nil
+}
+
+func loadCLAPModel(modelDir, libPath string) (*clap.Model, error) {
+	cfg := clap.DefaultConfig()
+	if libPath != "" {
+		cfg.LibPath = libPath
+	}
+	return clap.NewModel(modelDir, cfg)
 }
 
 // AnalyzeFileInfo runs the full analyzer suite against an arbitrary file on

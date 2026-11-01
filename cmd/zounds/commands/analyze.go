@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -13,9 +14,11 @@ import (
 
 func newAnalyzeCommand(cfg *Config) *cobra.Command {
 	var (
-		analyzeAll bool
-		id         int64
-		force      bool
+		analyzeAll   bool
+		id           int64
+		force        bool
+		clapModelDir string
+		clapLib      string
 	)
 
 	cmd := &cobra.Command{
@@ -24,6 +27,10 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !analyzeAll && id == 0 {
 				return fmt.Errorf("use --all or --id")
+			}
+
+			if clapModelDir == "" {
+				clapModelDir = os.Getenv("ZOUNDS_CLAP_MODEL_DIR")
 			}
 
 			ctx := cmd.Context()
@@ -44,6 +51,8 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 				SkipUnchanged:   analyzeAll && !force,
 				Concurrency:     cfg.Concurrency,
 				Logger:          newVerboseLogger(cfg, cmd.ErrOrStderr()),
+				CLAPModelDir:    clapModelDir,
+				CLAPLib:         clapLib,
 				OnSkip: func(sample core.Sample, err error) {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
 				},
@@ -68,6 +77,8 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 	flags.BoolVar(&analyzeAll, "all", false, "analyze all indexed samples")
 	flags.Int64Var(&id, "id", 0, "analyze a specific sample by id")
 	flags.BoolVar(&force, "force", false, "re-analyze samples even when the stored analysis matches the current file mtime")
+	flags.StringVar(&clapModelDir, "clap-model-dir", "", "path to directory containing CLAP ONNX models and tokenizer.json (enables 512-D CLAP embeddings)")
+	flags.StringVar(&clapLib, "clap-lib", "", "path to the ONNX Runtime shared library (default: platform search path)")
 
 	return cmd
 }

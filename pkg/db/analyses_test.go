@@ -408,4 +408,16 @@ func TestFeatureVectorNamespaceUniqueness(t *testing.T) {
 	if len(vectors) != 1 {
 		t.Fatalf("expected exactly 1 vector after replace, got %d", len(vectors))
 	}
+
+	found, err := repo.FindFeatureVector(ctx, sampleID, "analysis")
+	if err != nil {
+		t.Fatalf("FindFeatureVector: %v", err)
+	}
+	if found.Namespace != "analysis" || len(found.Values) != 3 {
+		t.Fatalf("unexpected found vector: %+v", found)
+	}
+
+	if _, err := repo.FindFeatureVector(ctx, sampleID, "nonexistent"); err == nil {
+		t.Fatal("expected error finding nonexistent namespace")
+	}
 }

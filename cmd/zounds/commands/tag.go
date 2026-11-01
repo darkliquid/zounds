@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -83,6 +84,10 @@ func newTagCommand(cfg *Config) *cobra.Command {
 }
 
 func runAutoTagging(ctx context.Context, cmd *cobra.Command, repo *db.Repository, cfg *Config, targetPath, ruleFile, clapModelDir, clapLib string, clapLabels []string, clapMinScore float32, clapMaxPredicted int) error {
+	if clapModelDir == "" {
+		clapModelDir = os.Getenv("ZOUNDS_CLAP_MODEL_DIR")
+	}
+
 	samples, err := pipeline.SelectSamplesByPath(ctx, repo, targetPath)
 	if err != nil {
 		return err

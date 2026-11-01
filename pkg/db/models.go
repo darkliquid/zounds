@@ -214,6 +214,28 @@ func (r *Repository) ReplaceFeatureVector(ctx context.Context, vector core.Featu
 	return r.InsertFeatureVector(ctx, vector)
 }
 
+func (r *Repository) FindFeatureVector(ctx context.Context, sampleID int64, namespace string) (core.FeatureVector, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, sample_id, namespace, version, dimensions, values_json, created_at
+		FROM feature_vectors
+		WHERE sample_id = ? AND namespace = ?;
+	`, sampleID, namespace)
+
+	var (
+		vector     core.FeatureVector
+		valuesJSON string
+		createdAt  sql.NullString
+	)
+	if err := row.Scan(&vector.ID, &vector.SampleID, &vector.Namespace, &vector.Version, &vector.Dimensions, &valuesJSON, &createdAt); err != nil {
+		return core.FeatureVector{}, err
+	}
+	if err := json.Unmarshal([]byte(valuesJSON), &vector.Values); err != nil {
+		return core.FeatureVector{}, fmt.Errorf("unmarshal feature vector values: %w", err)
+	}
+	vector.CreatedAt = parseTime(createdAt)
+	return vector, nil
+}
+
 func (r *Repository) ListFeatureVectorsForSample(ctx context.Context, sampleID int64) ([]core.FeatureVector, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, sample_id, namespace, version, dimensions, values_json, created_at

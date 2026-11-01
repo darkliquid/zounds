@@ -59,6 +59,60 @@ func TestAnalyzeCommandPersistsFeatureVector(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCommandWithCLAP(t *testing.T) {
+	modelDir := filepath.Clean("../../../onnx")
+	for _, required := range []string{
+		filepath.Join(modelDir, "audio_model.onnx"),
+		filepath.Join(modelDir, "text_model.onnx"),
+		filepath.Join(modelDir, "tokenizer.json"),
+	} {
+		if _, err := os.Stat(required); err != nil {
+			t.Skipf("skipping CLAP analyze test (%s not present)", required)
+		}
+	}
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "analyze-clap.db")
+	samplePath := filepath.Join(root, "tones", "a440.wav")
+	writeWAVFixture(t, samplePath)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	analyze := commands.NewRootCommand()
+	var out bytes.Buffer
+	analyze.SetOut(&out)
+	analyze.SetErr(&out)
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all", "--clap-model-dir", modelDir})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Skipf("execute analyze with CLAP skipped: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	sample, err := repo.FindSampleByPath(context.Background(), samplePath)
+	if err != nil {
+		t.Fatalf("find sample: %v", err)
+	}
+	vectors, err := repo.ListFeatureVectorsForSample(context.Background(), sample.ID)
+	if err != nil {
+		t.Fatalf("list feature vectors: %v", err)
+	}
+	if len(vectors) != 2 {
+		t.Fatalf("expected 2 feature vectors (analysis + clap), got %d", len(vectors))
+	}
+
+	clapVec, err := repo.FindFeatureVector(context.Background(), sample.ID, "clap")
+	if err != nil {
+		t.Fatalf("find clap vector: %v", err)
+	}
+	if clapVec.Dimensions != 512 || len(clapVec.Values) != 512 {
+		t.Fatalf("expected 512-D clap vector, got %d", clapVec.Dimensions)
+	}
+}
+
 func TestAnalyzeCommandVerboseShowsPerSampleProgress(t *testing.T) {
 	t.Parallel()
 

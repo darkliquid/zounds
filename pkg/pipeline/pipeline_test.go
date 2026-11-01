@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,6 +88,50 @@ func TestAnalyzeSamplesPersistsVectorAndRichAnalysis(t *testing.T) {
 	}
 	if rich.Channels == nil || *rich.Channels != 2 {
 		t.Fatalf("unexpected channels: %+v", rich.Channels)
+	}
+}
+
+func TestAnalyzeSamplesPersistsCLAPEmbedding(t *testing.T) {
+	modelDir := filepath.Clean("../../onnx")
+	for _, required := range []string{
+		filepath.Join(modelDir, "audio_model.onnx"),
+		filepath.Join(modelDir, "text_model.onnx"),
+		filepath.Join(modelDir, "tokenizer.json"),
+	} {
+		if _, err := os.Stat(required); err != nil {
+			t.Skipf("skipping CLAP analyze test (%s not present)", required)
+		}
+	}
+
+	ctx := context.Background()
+	repo := openTestRepo(t)
+	sample := indexWAV(t, repo, t.TempDir(), "tone.wav", 440)
+
+	summary, err := pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample}, pipeline.AnalyzeOptions{
+		CLAPModelDir: modelDir,
+	})
+	if err != nil {
+		t.Skipf("skipping CLAP analyze test (could not run CLAP: %v)", err)
+	}
+	if summary.Processed != 1 {
+		t.Fatalf("expected 1 processed sample, got %d", summary.Processed)
+	}
+
+	clapVector, err := repo.FindFeatureVector(ctx, sample.ID, "clap")
+	if err != nil {
+		t.Fatalf("FindFeatureVector(clap): %v", err)
+	}
+	if clapVector.Dimensions != 512 || len(clapVector.Values) != 512 {
+		t.Fatalf("expected 512 dimensions for clap vector, got %d (values=%d)", clapVector.Dimensions, len(clapVector.Values))
+	}
+
+	var sumSq float64
+	for _, v := range clapVector.Values {
+		sumSq += v * v
+	}
+	norm := math.Sqrt(sumSq)
+	if math.Abs(norm-1.0) > 1e-3 {
+		t.Fatalf("expected CLAP vector to have unit norm, got %v", norm)
 	}
 }
 

@@ -15,13 +15,15 @@ import (
 	"github.com/darkliquid/zounds/pkg/analysis"
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/audio/codecs"
+	"github.com/darkliquid/zounds/pkg/clap"
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
 // AnalysisOutput is the result of the full analyzer suite for one sample.
 type AnalysisOutput struct {
-	Results []core.AnalysisResult
-	Vector  core.FeatureVector
+	Results        []core.AnalysisResult
+	Vector         core.FeatureVector
+	FeatureVectors []core.FeatureVector
 }
 
 // NewCodecRegistry builds the standard decoder registry used by all
@@ -66,6 +68,13 @@ func DefaultAnalyzers(registry *zaudio.Registry) ([]core.Analyzer, error) {
 // AnalyzeSample decodes the sample once, runs the default analyzer suite
 // concurrently over the shared decode, and builds the 95-D feature vector.
 func AnalyzeSample(ctx context.Context, sample core.Sample) (AnalysisOutput, error) {
+	return AnalyzeSampleWithCLAP(ctx, sample, nil)
+}
+
+// AnalyzeSampleWithCLAP decodes the sample once, runs the default analyzer suite
+// concurrently over the shared decode, builds the 95-D feature vector, and
+// optionally extracts a 512-D L2-normalized CLAP embedding when clapModel is non-nil.
+func AnalyzeSampleWithCLAP(ctx context.Context, sample core.Sample, clapModel *clap.Model) (AnalysisOutput, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -97,7 +106,30 @@ func AnalyzeSample(ctx context.Context, sample core.Sample) (AnalysisOutput, err
 		return AnalysisOutput{}, err
 	}
 
-	return AnalysisOutput{Results: results, Vector: vector}, nil
+	var featureVectors []core.FeatureVector
+	if clapModel != nil {
+		emb, err := clapModel.EmbedAudio(ctx, decoded.Buffer)
+		if err != nil {
+			return AnalysisOutput{}, fmt.Errorf("clap embed %q: %w", sample.Path, err)
+		}
+		values := make([]float64, len(emb))
+		for i, v := range emb {
+			values[i] = float64(v)
+		}
+		featureVectors = append(featureVectors, core.FeatureVector{
+			SampleID:   sample.ID,
+			Namespace:  "clap",
+			Version:    "1.0",
+			Dimensions: len(values),
+			Values:     values,
+		})
+	}
+
+	return AnalysisOutput{
+		Results:        results,
+		Vector:         vector,
+		FeatureVectors: featureVectors,
+	}, nil
 }
 
 // RunAnalyzers executes analyzers concurrently (bounded by workers) while

@@ -454,3 +454,59 @@ func TestAutoTagRunsConcurrently(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoTagConsumesPersistedAnalysisWithoutReDecode(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := openTestRepo(t)
+	root := t.TempDir()
+	sample := indexWAV(t, repo, root, "tone.wav", 440)
+
+	// Pre-analyze the sample so sample_analyses is populated.
+	summary, err := pipeline.AnalyzeSamples(ctx, repo, []core.Sample{sample}, pipeline.AnalyzeOptions{})
+	if err != nil {
+		t.Fatalf("analyze sample: %v", err)
+	}
+	if summary.Processed != 1 {
+		t.Fatalf("expected 1 processed, got %+v", summary)
+	}
+
+	// Delete the physical audio file from disk to guarantee AutoTag does not re-decode.
+	if err := os.Remove(sample.Path); err != nil {
+		t.Fatalf("remove fixture file: %v", err)
+	}
+
+	rulePath := filepath.Join(t.TempDir(), "rules.json")
+	rules := `{
+  "rules": [
+    {
+      "tag": "a-note",
+      "expr": "Metrics[\"frequency_hz\"] > 400 && Metrics[\"frequency_hz\"] < 480",
+      "confidence": 0.95
+    }
+  ]
+}`
+	if err := os.WriteFile(rulePath, []byte(rules), 0o644); err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+
+	tagSummary, err := pipeline.AutoTag(ctx, repo, []core.Sample{sample}, pipeline.AutoTagOptions{
+		RuleFile: rulePath,
+	})
+	if err != nil {
+		t.Fatalf("AutoTag failed when physical file missing despite persisted analysis: %v", err)
+	}
+	if tagSummary.Processed != 1 || tagSummary.Applied != 1 {
+		t.Fatalf("expected 1 processed and 1 applied tag, got %+v", tagSummary)
+	}
+
+	tags, err := repo.ListTagsForSample(ctx, sample.ID)
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	if len(tags) != 1 || tags[0].NormalizedName != "a note" {
+		t.Fatalf("expected 'a note' tag applied from persisted analysis, got %+v", tags)
+	}
+}
+

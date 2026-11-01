@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/darkliquid/zounds/pkg/analysis"
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/db"
@@ -53,42 +52,13 @@ type AutoTagSummary struct {
 	Skipped   int
 }
 
-// tagAnalyzers is the focused analyzer set used by auto-tagging. Unlike
-// AnalyzeSample the taggers do not need the full suite.
-func tagAnalyzers(registry *zaudio.Registry) ([]core.Analyzer, error) {
-	factory := []func() (core.Analyzer, error){
-		func() (core.Analyzer, error) { return analysis.NewMetadataAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewSpectralAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewDynamicsAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewPitchAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewKeyAnalyzer(registry) },
-		func() (core.Analyzer, error) { return analysis.NewHarmonicsAnalyzer(registry) },
-	}
-	analyzers := make([]core.Analyzer, 0, len(factory))
-	for _, create := range factory {
-		analyzer, err := create()
-		if err != nil {
-			return nil, err
-		}
-		analyzers = append(analyzers, analyzer)
-	}
-	return analyzers, nil
-}
-
 // AutoTag generates and persists tags for samples using the metadata,
-// optional rule, and optional CLAP taggers over a shared per-sample decode.
+// optional rule, and optional CLAP taggers. When a current SampleAnalysis is
+// already stored in the repository, it consumes the stored metrics and
+// attributes without re-decoding the audio file from disk.
 func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, opts AutoTagOptions) (AutoTagSummary, error) {
 	if repo == nil {
 		return AutoTagSummary{}, errors.New("pipeline: nil repository")
-	}
-
-	registry, err := NewCodecRegistry()
-	if err != nil {
-		return AutoTagSummary{}, fmt.Errorf("create codec registry: %w", err)
-	}
-	analyzers, err := tagAnalyzers(registry)
-	if err != nil {
-		return AutoTagSummary{}, err
 	}
 
 	taggers := []core.Tagger{tags.NewMetadataTagger()}
@@ -138,32 +108,40 @@ func AutoTag(ctx context.Context, repo *db.Repository, samples []core.Sample, op
 	tagSample := func(sample core.Sample) {
 		verbosef(opts.Logger, "tagging sample %s", sample.Path)
 
-		decoded, err := zaudio.DecodeFile(ctx, registry, sample.Path)
-		if err != nil {
-			if opts.SkipUndecodable && zaudio.IsDecodeError(err) {
-				summaryMu.Lock()
-				summary.Skipped++
-				summaryMu.Unlock()
-				if opts.OnSkip != nil {
-					opts.OnSkip(sample, err)
-				}
-				return
-			}
-			setErr(fmt.Errorf("decode sample %q: %w", sample.Path, err))
-			return
-		}
-		sampleCtx := analysis.ContextWithDecodedSample(ctx, sample.Path, decoded)
+		var (
+			combined  core.AnalysisResult
+			sampleCtx = ctx
+		)
 
-		results := make([]core.AnalysisResult, 0, len(analyzers))
-		for _, analyzer := range analyzers {
-			result, analyzeErr := analyzer.Analyze(sampleCtx, sample)
+		stored, err := repo.GetSampleAnalysis(ctx, sample.ID)
+		analysisCurrent := err == nil && (!sample.ModifiedAt.IsZero() && stored.AnalyzedModifiedAt.Equal(sample.ModifiedAt) || sample.ModifiedAt.IsZero())
+
+		if analysisCurrent {
+			combined = AnalysisResultFromSampleAnalysis(stored)
+		} else {
+			output, analyzeErr := AnalyzeSample(ctx, sample)
 			if analyzeErr != nil {
-				setErr(analyzeErr)
+				if opts.SkipUndecodable && zaudio.IsDecodeError(analyzeErr) {
+					summaryMu.Lock()
+					summary.Skipped++
+					summaryMu.Unlock()
+					if opts.OnSkip != nil {
+						opts.OnSkip(sample, analyzeErr)
+					}
+					return
+				}
+				setErr(fmt.Errorf("analyze sample %q: %w", sample.Path, analyzeErr))
 				return
 			}
-			results = append(results, result)
+
+			if !opts.DryRun {
+				if err := PersistAnalysisOutput(ctx, repo, sample, output); err != nil {
+					setErr(err)
+					return
+				}
+			}
+			combined = CombineAnalysisResults(sample.ID, output.Results...)
 		}
-		combined := CombineAnalysisResults(sample.ID, results...)
 
 		generated := make([]core.Tag, 0, 16)
 		for _, tagger := range taggers {

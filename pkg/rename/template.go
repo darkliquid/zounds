@@ -56,6 +56,19 @@ func BuildTemplateData(sample core.Sample, tags []core.Tag, attributes map[strin
 		slices.Sort(bySource[source])
 	}
 
+	metadata := cloneStringMap(sample.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	for k, v := range attributes {
+		if strings.HasPrefix(k, "embedded.") {
+			shortKey := strings.TrimPrefix(k, "embedded.")
+			if _, exists := metadata[shortKey]; !exists {
+				metadata[shortKey] = v
+			}
+		}
+	}
+
 	return TemplateData{
 		ID:           sample.ID,
 		Name:         sample.FileName,
@@ -69,7 +82,7 @@ func BuildTemplateData(sample core.Sample, tags []core.Tag, attributes map[strin
 		Tags:         tagNames,
 		TagsBySource: bySource,
 		Attributes:   cloneStringMap(attributes),
-		Metadata:     cloneStringMap(sample.Metadata),
+		Metadata:     metadata,
 	}
 }
 

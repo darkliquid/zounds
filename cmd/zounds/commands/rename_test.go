@@ -159,3 +159,38 @@ func TestRenameCommandRefusesToOverwriteExistingFile(t *testing.T) {
 		t.Fatalf("existing file was overwritten: %q", string(gotBytes))
 	}
 }
+
+func TestRenameCommandUsesPersistedAnalysisAttributesAndMetadata(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "rename-attr.db")
+	source := filepath.Join(root, "source.wav")
+	writeSineWAVFixture(t, source, 440, 0.2)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	analyze := commands.NewRootCommand()
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute analyze: %v", err)
+	}
+
+	cmd := commands.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--db", dbPath, "--dry-run", "rename", "--path", source, "--template", `renamed/{{.Attributes.note_name}}_{{.Stem}}`})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute rename: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "renamed/A4_source.wav") {
+		t.Fatalf("expected rendered attribute note_name 'A4', got: %q", out.String())
+	}
+}
+

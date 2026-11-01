@@ -128,38 +128,9 @@ Account for these verified defects before extending affected subsystems:
 
 ---
 
-## 6. Prioritized Development Roadmap
+## 6. Development Roadmap
 
-### Phase 0: Immediate Stabilization & Data Safety
-- Update failing `HEAD` CLI tests (`tag_test.go`, `integration_test.go`) to use explicit `--rule-file` / tag fixtures, fix `govet` warning (`pkg/clap/model.go:64`), and migrate `pkg/clap` ONNX Runtime bindings from `yalue/onnxruntime_go` to `ebitengine/purego` so `CGO_ENABLED=0` builds retain full CLAP support.
-- Add batch collision preflight, path sanitization (including `:`/`/`/`..` in `slug()`), and dot-in-stem preservation to `pkg/rename` + `zounds rename`.
-- Clamp OGG float overshoots, reject `NaN` in `PCMBuffer.Validate()`, support 32-bit IEEE Float WAV (`Format=3`/`0xFFFE`), fix 8-bit unsigned PCM scaling, fix `scanner`/`exact` goroutine leaks, and skip undecodable samples (`.aac`/`.m4a`) with warnings in batch runs instead of aborting.
-
-### Phase 1: Schema v2 & Unified `pkg/` Orchestration
-- Add `schema_migrations` and `0002_rich_analysis_and_provenance.sql`:
-  - `sample_analyses` table with indexed columns (`duration_seconds`, `sample_rate`, `channels`, `bit_depth`, `bpm`, `bpm_confidence`, `key_tonic`, `key_mode`, `key_confidence`, `chord`, `chord_confidence`, `pitch_hz`, `midi_note`, `cents_offset`, `pitch_confidence`, `loop_class`, `loop_confidence`, `lufs_integrated`, `true_peak_dbtp`, `analyzed_modified_at`, `metrics_json`, `attributes_json`).
-  - Move `source` and `confidence` to `sample_tags(sample_id, tag_id, source, confidence)`.
-  - Add `UNIQUE(sample_id, namespace)` on `feature_vectors`, `perceptual_hashes` CRUD, and `sample_projections(sample_id, method, namespace, x, y)`.
-- Move analysis/tagging/search orchestration into `pkg/`, honoring `--concurrency` across samples, incremental `modified_at` skipping, `scan --prune`, and `signal.NotifyContext` in `cmd/zounds/main.go`. Consume persisted `sample_analyses` in `tag --auto` and `rename`.
-
-### Phase 2: Musical & Acoustic Extraction Upgrades
-- Parse WAV `smpl`, `acid`, `bext`, `LIST/INFO`, RIFF `id3 `, AIFF Apple Loop `basc`, and ID3/Vorbis BPM/Key tags as high-confidence priors.
-- Implement **`ChordAnalyzer` (`pkg/analysis/chord.go`)**: log-frequency harmonic-deconvolved chromagram template matching (major, minor, dim, aug, sus2/4, 7ths) distinguishing polyphonic chords from single-note overtones (`chord`, `chord_root`, `chord_quality`, `chord_confidence`).
-- Upgrade `PitchAnalyzer` (YIN/MPM `25–4000 Hz` + parabolic interpolation + confidence gate), `BeatAnalyzer` (log-mel flux + lag-normalized autocorrelation + `tempo_confidence`), `LoopAnalyzer` (drop `lag=1..20` bug, check bar-duration alignment & container loop flags), true ITU-R BS.1770-4 LUFS/dBTP, and windowed-sinc resampling in `convert` and `playback`.
-
-### Phase 3: CLAP Embeddings & Faceted Auto-Tagging
-- Fix `pkg/clap`: RoBERTa `<pad>` ID `1`, `HopLength=480`, Slaney mel filters, raw dB log-mel, `repeatpad` for short one-shots, FFT mutex, `EmbedAudio`/`EmbedText` exports, and cached text prompt embeddings.
-- Persist 512-D `"clap"` embeddings in `feature_vectors` during `analyze`, enabling instant zero-shot re-tagging and natural-language audio search.
-- Ship a namespaced faceted tag taxonomy (`instrument:*`, `role:*`, `character:*`, `articulation:oneshot|loop`, `genre:*`) with `NormalizeTagName` `:` handling and CLAP prompt ensembling, and wire `LocalModelTagger` and opt-in `LLMTagger` into `zounds tag`.
-
-### Phase 4: Multi-Metric Deduplication, Similarity & Clustering
-- Replace 1D-FFT `"spectral-8x8"` with a full-duration 2D spectro-temporal fingerprint persisted in `perceptual_hashes`, indexed via 4×16-bit LSH buckets with bounded-diameter grouping and `--keep best-quality`.
-- Standardize `"acoustic"` vectors (excluding container metadata) and support `--metric clap|acoustic|timbre|harmonic|rhythm|perceptual|hybrid` in `similar` and `cluster`.
-- Fix t-SNE `perplexityRow` underflow and small-`N` perplexity clamping, wire `dbscan`/HDBSCAN into `zounds cluster`, auto-label clusters from dominant member tags, and persist 2D coordinates to `sample_projections`.
-
-### Phase 5: Web Workstation & Rich Export
-- Replace N+1 queries and per-request live t-SNE in `web/server.go` with batch SQL queries and persisted `sample_projections` (fixing `X`/`Y` `omitempty` and JSON casing).
-- Add faceted UI filtering (BPM, key, chord, one-shot/loop, duration), on-the-fly WAV preview transcoding for AIFF, "Find Similar" discovery, inline tag editing, and rich `zounds export`.
+The phased roadmap (Phase 0: Stabilization & Data Safety through Phase 5: Web Workstation & Rich Export) is tracked as beads in the `bd` issue tracker (`bd ready`, `bd ready --priority 0`). Phase epics are the `Phase N: ...` issues; each carries the relevant §4 defect references, priority (P0–P4), and dependency edges between tasks. The roadmap lives only in beads — keep it there rather than re-adding phase lists here.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:46cd31e7 -->
 ## Beads Issue Tracker

@@ -53,6 +53,10 @@ func newAnalyzeCommand(cfg *Config) *cobra.Command {
 				verbosef(logger, "analyzing sample %s", sample.Path)
 				results, vector, err := analyzeSample(ctx, sample, builder)
 				if err != nil {
+					if analyzeAll && zaudio.IsDecodeError(err) {
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping undecodable sample %s: %v\n", sample.Path, err)
+						continue
+					}
 					return err
 				}
 				_ = results

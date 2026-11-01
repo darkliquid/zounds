@@ -3,11 +3,14 @@ package scanner_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/darkliquid/zounds/pkg/core"
 	"github.com/darkliquid/zounds/pkg/scanner"
@@ -91,6 +94,42 @@ func TestScanLogsRootsAndFilesWhenLoggerConfigured(t *testing.T) {
 			t.Fatalf("expected %q in log output %q", want, output)
 		}
 	}
+}
+
+func TestScanDoesNotLeakWorkerGoroutinesOnEarlyError(t *testing.T) {
+	validRoot := t.TempDir()
+	for i := range 32 {
+		mustWriteFile(t, filepath.Join(validRoot, fmt.Sprintf("a_sample_%02d.wav", i)))
+	}
+	if os.Geteuid() != 0 {
+		unreadableDir := filepath.Join(validRoot, "z_unreadable")
+		if err := os.MkdirAll(unreadableDir, 0o755); err != nil {
+			t.Fatalf("mkdir unreadable: %v", err)
+		}
+		if err := os.Chmod(unreadableDir, 0o000); err != nil {
+			t.Fatalf("chmod unreadable: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(unreadableDir, 0o755) })
+	}
+	missingRoot := filepath.Join(t.TempDir(), "does-not-exist")
+
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
+	s := scanner.New(scanner.Options{Workers: 4})
+	if _, err := s.Scan(context.Background(), validRoot, missingRoot); err == nil {
+		t.Fatal("expected error for missing second scan root")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		if runtime.NumGoroutine() <= before+1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goroutine leak after failed Scan: before=%d after=%d", before, runtime.NumGoroutine())
 }
 
 func mustWriteFile(t *testing.T, path string) {

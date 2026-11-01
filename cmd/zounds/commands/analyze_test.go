@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -127,5 +128,47 @@ func TestInfoCommandOutputsAnalysisJSON(t *testing.T) {
 	}
 	if _, ok := analyzers["hpss"]; !ok {
 		t.Fatalf("expected hpss analyzer output")
+	}
+}
+
+func TestAnalyzeCommandAllSkipsUndecodableSamplesWithWarning(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "analyze-skip.db")
+	validWav := filepath.Join(root, "valid.wav")
+	unsupportedM4A := filepath.Join(root, "unsupported.m4a")
+	corruptWav := filepath.Join(root, "corrupt.wav")
+
+	writeWAVFixture(t, validWav)
+	if err := os.WriteFile(unsupportedM4A, []byte("fake-m4a"), 0o644); err != nil {
+		t.Fatalf("write m4a: %v", err)
+	}
+	if err := os.WriteFile(corruptWav, []byte("corrupt-riff"), 0o644); err != nil {
+		t.Fatalf("write corrupt wav: %v", err)
+	}
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	analyze := commands.NewRootCommand()
+	var stdout, stderr bytes.Buffer
+	analyze.SetOut(&stdout)
+	analyze.SetErr(&stderr)
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected analyze --all to succeed while skipping undecodables, got: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "analyzed 1 samples") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	for _, skipped := range []string{unsupportedM4A, corruptWav} {
+		if !strings.Contains(stderr.String(), skipped) {
+			t.Fatalf("expected warning mentioning %q in stderr %q", skipped, stderr.String())
+		}
 	}
 }

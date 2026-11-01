@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -57,6 +58,12 @@ func NewExactFinder(workers int, logger ...*log.Logger) ExactFinder {
 }
 
 func (f ExactFinder) Find(ctx context.Context, samples []core.Sample) ([]DuplicateGroup, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	sizeBuckets := make(map[int64][]core.Sample)
 	for _, sample := range samples {
 		sizeBuckets[sample.SizeBytes] = append(sizeBuckets[sample.SizeBytes], sample)
@@ -70,34 +77,53 @@ func (f ExactFinder) Find(ctx context.Context, samples []core.Sample) ([]Duplica
 	results := make(chan FileHash)
 	errCh := make(chan error, 1)
 
+	workers := f.Workers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+
 	var wg sync.WaitGroup
-	for i := 0; i < f.Workers; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for item := range jobs {
-				if f.Logger != nil {
-					f.Logger.Printf("hashing file %s", item.sample.Path)
-				}
-				hash, err := hashFile(ctx, item.sample.Path)
-				if err != nil {
-					select {
-					case errCh <- fmt.Errorf("hash %q: %w", item.sample.Path, err):
-					default:
-					}
-					return
-				}
-
+			for {
 				select {
 				case <-ctx.Done():
 					return
-				case results <- FileHash{Sample: item.sample, SHA256: hash}:
+				case item, ok := <-jobs:
+					if !ok {
+						return
+					}
+					if f.Logger != nil {
+						f.Logger.Printf("hashing file %s", item.sample.Path)
+					}
+					hash, err := hashFile(ctx, item.sample.Path)
+					if err != nil {
+						if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+							select {
+							case errCh <- fmt.Errorf("hash %q: %w", item.sample.Path, err):
+							default:
+							}
+							cancel()
+						}
+						return
+					}
+
+					select {
+					case <-ctx.Done():
+						return
+					case results <- FileHash{Sample: item.sample, SHA256: hash}:
+					}
 				}
 			}
 		}()
 	}
 
+	var feedWG sync.WaitGroup
+	feedWG.Add(1)
 	go func() {
+		defer feedWG.Done()
 		defer close(jobs)
 		for _, bucket := range sizeBuckets {
 			if len(bucket) < 2 {
@@ -118,18 +144,41 @@ func (f ExactFinder) Find(ctx context.Context, samples []core.Sample) ([]Duplica
 		close(results)
 	}()
 
+	shutdown := func() {
+		cancel()
+		for range results {
+		}
+		feedWG.Wait()
+	}
+
 	grouped := map[string][]core.Sample{}
 	sizeByHash := map[string]int64{}
 	for {
 		select {
 		case <-ctx.Done():
+			select {
+			case err := <-errCh:
+				shutdown()
+				return nil, err
+			default:
+			}
+			shutdown()
 			return nil, ctx.Err()
 		case err := <-errCh:
 			if err != nil {
+				shutdown()
 				return nil, err
 			}
 		case result, ok := <-results:
 			if !ok {
+				feedWG.Wait()
+				select {
+				case err := <-errCh:
+					if err != nil {
+						return nil, err
+					}
+				default:
+				}
 				return buildDuplicateGroups(grouped, sizeByHash), nil
 			}
 			grouped[result.SHA256] = append(grouped[result.SHA256], result.Sample)

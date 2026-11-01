@@ -77,6 +77,12 @@ func (s *Scanner) Scan(ctx context.Context, roots ...string) ([]core.Sample, err
 	if len(roots) == 0 {
 		return nil, errors.New("scan requires at least one root")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	s.logf("starting scan with %d root(s) and %d worker(s)", len(roots), s.workers)
 
@@ -89,20 +95,29 @@ func (s *Scanner) Scan(ctx context.Context, roots ...string) ([]core.Sample, err
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
-			for item := range candidates {
-				sample, err := s.statCandidate(item.root, item.path)
-				if err != nil {
-					select {
-					case errCh <- err:
-					default:
-					}
-					return
-				}
-
+			for {
 				select {
 				case <-ctx.Done():
 					return
-				case results <- sample:
+				case item, ok := <-candidates:
+					if !ok {
+						return
+					}
+					sample, err := s.statCandidate(item.root, item.path)
+					if err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+						cancel()
+						return
+					}
+
+					select {
+					case <-ctx.Done():
+						return
+					case results <- sample:
+					}
 				}
 			}
 		}()
@@ -113,30 +128,59 @@ func (s *Scanner) Scan(ctx context.Context, roots ...string) ([]core.Sample, err
 		close(results)
 	}()
 
+	var walkWG sync.WaitGroup
+	walkWG.Add(1)
 	go func() {
+		defer walkWG.Done()
 		defer close(candidates)
 		for _, root := range roots {
 			if err := s.walkRoot(ctx, root, candidates); err != nil {
-				select {
-				case errCh <- err:
-				default:
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					select {
+					case errCh <- err:
+					default:
+					}
+					cancel()
 				}
 				return
 			}
 		}
 	}()
 
+	shutdown := func() {
+		cancel()
+		for range results {
+		}
+		walkWG.Wait()
+	}
+
 	var samples []core.Sample
 	for {
 		select {
 		case <-ctx.Done():
+			select {
+			case err := <-errCh:
+				shutdown()
+				return nil, err
+			default:
+			}
+			shutdown()
 			return nil, ctx.Err()
 		case err := <-errCh:
 			if err != nil {
+				shutdown()
 				return nil, err
 			}
 		case sample, ok := <-results:
 			if !ok {
+				walkWG.Wait()
+				select {
+				case err := <-errCh:
+					if err != nil {
+						return nil, err
+					}
+				default:
+				}
 				sort.Slice(samples, func(i, j int) bool {
 					return samples[i].Path < samples[j].Path
 				})

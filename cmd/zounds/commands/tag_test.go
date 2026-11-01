@@ -312,6 +312,46 @@ func TestTagCommandAddAndRemoveManualTags(t *testing.T) {
 	}
 }
 
+func TestTagCommandAutoSkipsUndecodableSamplesInBatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "tag-skip.db")
+	rulePath := filepath.Join(t.TempDir(), "rules.json")
+	validWav := filepath.Join(root, "tone.wav")
+	unsupportedAAC := filepath.Join(root, "voice.aac")
+
+	writeSineWAVFixture(t, validWav, 55, 1.0)
+	if err := os.WriteFile(unsupportedAAC, []byte("fake-aac"), 0o644); err != nil {
+		t.Fatalf("write aac: %v", err)
+	}
+	if err := os.WriteFile(rulePath, []byte(`{"rules":[{"tag":"instrument:sub","expr":"Metrics[\"frequency_hz\"] < 80"}]}`), 0o644); err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute scan: %v", err)
+	}
+
+	tagCmd := commands.NewRootCommand()
+	var stdout, stderr bytes.Buffer
+	tagCmd.SetOut(&stdout)
+	tagCmd.SetErr(&stderr)
+	tagCmd.SetArgs([]string{"--db", dbPath, "tag", "--auto", "--rule-file", rulePath})
+	if err := tagCmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected tag --auto batch to skip undecodable .aac, got: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "processed 1 samples and applied 1 tags") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), unsupportedAAC) {
+		t.Fatalf("expected warning for %q in stderr %q", unsupportedAAC, stderr.String())
+	}
+}
+
 func writeWAVFixture(t *testing.T, path string) {
 	t.Helper()
 

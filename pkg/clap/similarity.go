@@ -2,8 +2,8 @@ package clap
 
 import "math"
 
-// l2Normalize normalises v in-place to unit length. No-ops on zero vectors.
-func l2Normalize(v []float32) {
+// L2Normalize normalises v in-place to unit length. No-ops on zero vectors.
+func L2Normalize(v []float32) {
 	var sum float64
 	for _, x := range v {
 		sum += float64(x) * float64(x)
@@ -18,10 +18,15 @@ func l2Normalize(v []float32) {
 	}
 }
 
-// cosineSimilarity returns the cosine similarity of two vectors.
-// For best results normalise both vectors with l2Normalize first, in which
+// l2Normalize is an alias kept for backward package compatibility.
+func l2Normalize(v []float32) {
+	L2Normalize(v)
+}
+
+// CosineSimilarity returns the cosine similarity of two vectors.
+// For best results normalise both vectors with L2Normalize first, in which
 // case this is just the dot product.
-func cosineSimilarity(a, b []float32) float32 {
+func CosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
@@ -36,4 +41,9 @@ func cosineSimilarity(a, b []float32) float32 {
 		return 0
 	}
 	return float32(dot / denom)
+}
+
+// cosineSimilarity is an alias kept for backward package compatibility.
+func cosineSimilarity(a, b []float32) float32 {
+	return CosineSimilarity(a, b)
 }

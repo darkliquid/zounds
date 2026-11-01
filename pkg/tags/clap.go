@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync"
 
 	zaudio "github.com/darkliquid/zounds/pkg/audio"
 	"github.com/darkliquid/zounds/pkg/audio/codecs"
@@ -11,23 +12,20 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const localCLAPTaggerVersion = "0.1.0"
+const localCLAPTaggerVersion = "0.2.0"
 
 const (
-	defaultCLAPMinScore     = 0.32
-	defaultCLAPMaxPredicted = 3
-	defaultCLAPScoreSlack   = 0.05
+	defaultCLAPMinScore     = 0.20
+	defaultCLAPMaxPredicted = 4
+	defaultCLAPScoreSlack   = 0.08
 )
 
-// defaultCLAPLabels is the built-in set of audio descriptors used when the
+// defaultCLAPLabels is the built-in namespaced faceted taxonomy used when the
 // caller does not supply an explicit label list.
-var defaultCLAPLabels = []string{
-	"bass", "bell", "clap", "drone", "glitch", "hi hat", "impact",
-	"kick", "lead", "metallic", "pad", "percussive", "pluck",
-	"snare", "sub bass", "sweep", "vocal chop",
-}
+var defaultCLAPLabels = DefaultFacetedLabels
 
-// LocalCLAPTagger tags audio samples using a locally hosted CLAP ONNX model.
+// LocalCLAPTagger tags audio samples using a locally hosted CLAP ONNX model with
+// prompt ensembling across the faceted tag taxonomy.
 // It requires:
 //   - A directory containing audio_model.onnx, text_model.onnx, and
 //     tokenizer.json (as exported by optimum from laion/clap-htsat-unfused or
@@ -38,9 +36,11 @@ type LocalCLAPTagger struct {
 	model        *clap.Model
 	registry     *zaudio.Registry
 	labels       []string
+	ensembles    map[string][]float32
 	defaultsUsed bool
 	minScore     float32
 	maxPredicted int
+	mu           sync.Mutex
 }
 
 // NewLocalCLAPTagger creates a LocalCLAPTagger.
@@ -90,6 +90,7 @@ func NewLocalCLAPTagger(modelDir, libPath string, labels []string, minScore floa
 		model:        model,
 		registry:     registry,
 		labels:       labels,
+		ensembles:    make(map[string][]float32, len(labels)),
 		defaultsUsed: defaultsUsed,
 		minScore:     minScore,
 		maxPredicted: maxPredicted,
@@ -102,25 +103,72 @@ func (t *LocalCLAPTagger) Close() error {
 }
 
 // Name implements core.Tagger.
-func (LocalCLAPTagger) Name() string { return "clap" }
+func (*LocalCLAPTagger) Name() string { return "clap" }
 
 // Version implements core.Tagger.
-func (LocalCLAPTagger) Version() string { return localCLAPTaggerVersion }
+func (*LocalCLAPTagger) Version() string { return localCLAPTaggerVersion }
 
-// Tags implements core.Tagger.  It decodes the sample, runs CLAP inference,
-// and returns the top matching labels as core.Tag values.
+// Tags implements core.Tagger. It decodes the sample, computes the audio
+// embedding, matches against prompt-ensembled text representations, and
+// returns the top matching labels as core.Tag values.
 func (t *LocalCLAPTagger) Tags(ctx context.Context, sample core.Sample, _ core.AnalysisResult) ([]core.Tag, error) {
 	decoded, err := zaudio.DecodeFile(ctx, t.registry, sample.Path)
 	if err != nil {
 		return nil, fmt.Errorf("decode %q for CLAP: %w", sample.Path, err)
 	}
 
-	scores, err := t.model.ClassifyAudio(ctx, decoded.Buffer, t.labels)
+	audioEmb, err := t.model.EmbedAudio(ctx, decoded.Buffer)
 	if err != nil {
-		return nil, fmt.Errorf("CLAP classify %q: %w", sample.Path, err)
+		return nil, fmt.Errorf("CLAP audio embed %q: %w", sample.Path, err)
 	}
 
+	scores := make([]clap.LabelScore, 0, len(t.labels))
+	for _, label := range t.labels {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		ensEmb, err := t.getEnsembleEmbedding(ctx, label)
+		if err != nil {
+			return nil, fmt.Errorf("CLAP ensemble embed %q: %w", label, err)
+		}
+
+		scores = append(scores, clap.LabelScore{
+			Label: label,
+			Score: clap.CosineSimilarity(audioEmb, ensEmb),
+		})
+	}
+
+	slices.SortFunc(scores, func(a, b clap.LabelScore) int {
+		if a.Score > b.Score {
+			return -1
+		}
+		if a.Score < b.Score {
+			return 1
+		}
+		return 0
+	})
+
 	return t.tagsForScores(scores), nil
+}
+
+func (t *LocalCLAPTagger) getEnsembleEmbedding(ctx context.Context, label string) ([]float32, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.ensembles == nil {
+		t.ensembles = make(map[string][]float32)
+	}
+	if emb, ok := t.ensembles[label]; ok {
+		return emb, nil
+	}
+
+	emb, err := EnsembleTextEmbedding(ctx, t.model, label)
+	if err != nil {
+		return nil, err
+	}
+	t.ensembles[label] = emb
+	return emb, nil
 }
 
 func (t *LocalCLAPTagger) tagsForScores(scores []clap.LabelScore) []core.Tag {

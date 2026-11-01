@@ -33,16 +33,18 @@ func TestNewLocalCLAPTagger_DefaultLabels(t *testing.T) {
 		t.Error("defaultCLAPLabels should not be empty")
 	}
 	expected := map[string]struct{}{
-		"kick":       {},
-		"snare":      {},
-		"impact":     {},
-		"vocal chop": {},
+		"instrument:kick":       {},
+		"instrument:snare":      {},
+		"articulation:oneshot":  {},
+		"articulation:loop":     {},
+		"character:dark":        {},
+		"genre:techno":          {},
 	}
 	for _, label := range labels {
 		delete(expected, label)
 	}
 	if len(expected) != 0 {
-		t.Fatalf("defaultCLAPLabels missing expected entries: %#v", expected)
+		t.Fatalf("defaultCLAPLabels missing expected faceted entries: %#v", expected)
 	}
 }
 
@@ -54,15 +56,63 @@ func TestLocalCLAPTaggerTagsForScoresTightensDefaultLabels(t *testing.T) {
 	}
 
 	got := tagger.tagsForScores([]clap.LabelScore{
-		{Label: "pad", Score: 0.44},
-		{Label: "bass", Score: 0.40},
-		{Label: "impact", Score: 0.31},
+		{Label: "instrument:pad", Score: 0.44},
+		{Label: "instrument:bass", Score: 0.40},
+		{Label: "character:metallic", Score: 0.12},
 	})
 
 	if len(got) != 2 {
 		t.Fatalf("expected 2 retained labels, got %#v", got)
 	}
-	if got[0].NormalizedName != "pad" || got[1].NormalizedName != "bass" {
+	if got[0].NormalizedName != "instrument:pad" || got[1].NormalizedName != "instrument:bass" {
 		t.Fatalf("unexpected retained labels %#v", got)
+	}
+}
+
+func TestTaxonomy_ParseAndFormat(t *testing.T) {
+	facet, val, ok := ParseTag("Instrument:Sub_Bass")
+	if !ok || facet != "instrument" || val != "sub bass" {
+		t.Fatalf("unexpected ParseTag: facet=%q val=%q ok=%v", facet, val, ok)
+	}
+
+	facet, val, ok = ParseTag("unfaceted")
+	if ok || facet != "" || val != "unfaceted" {
+		t.Fatalf("unexpected unfaceted ParseTag: facet=%q val=%q ok=%v", facet, val, ok)
+	}
+
+	formatted := FormatTag("character", "Dark_Metallic")
+	if formatted != "character:dark metallic" {
+		t.Fatalf("unexpected FormatTag: %q", formatted)
+	}
+
+	for _, sf := range StandardFacets {
+		if !IsStandardFacet(sf) {
+			t.Errorf("expected %q to be standard facet", sf)
+		}
+	}
+	if IsStandardFacet("unknown_facet") {
+		t.Errorf("did not expect unknown_facet to be standard")
+	}
+}
+
+func TestTaxonomy_PromptEnsembleForTag(t *testing.T) {
+	cases := []struct {
+		tag      string
+		minCount int
+	}{
+		{"instrument:kick", 4},
+		{"role:lead", 4},
+		{"character:metallic", 4},
+		{"articulation:oneshot", 4},
+		{"articulation:loop", 4},
+		{"genre:techno", 4},
+		{"freeform_sound", 3},
+	}
+
+	for _, tc := range cases {
+		prompts := PromptEnsembleForTag(tc.tag)
+		if len(prompts) < tc.minCount {
+			t.Errorf("PromptEnsembleForTag(%q) produced %d prompts, want >= %d", tc.tag, len(prompts), tc.minCount)
+		}
 	}
 }

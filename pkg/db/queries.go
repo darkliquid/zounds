@@ -10,8 +10,8 @@ import (
 )
 
 type TagUsage struct {
-	Tag         core.Tag
-	SampleCount int
+	Tag         core.Tag `json:"tag"`
+	SampleCount int      `json:"sample_count"`
 }
 
 func (r *Repository) EnsureTag(ctx context.Context, tag core.Tag) (int64, error) {

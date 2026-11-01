@@ -87,7 +87,7 @@ func TestServerFiltersSamplesByQuery(t *testing.T) {
 	}
 
 	var payload []struct {
-		FileName string
+		FileName string `json:"file_name"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)

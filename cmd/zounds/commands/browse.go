@@ -110,13 +110,18 @@ func browseMatches(ctx context.Context, repo *db.Repository, query string, requi
 		normalizedRequired = append(normalizedRequired, core.NormalizeTagName(tag))
 	}
 
+	sampleIDs := make([]int64, len(samples))
+	for i, sample := range samples {
+		sampleIDs[i] = sample.ID
+	}
+	tagsBySample, err := repo.ListTagsForSampleIDs(ctx, sampleIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	results := make([]browseResult, 0, len(samples))
 	for _, sample := range samples {
-		tags, err := repo.ListTagsForSample(ctx, sample.ID)
-		if err != nil {
-			return nil, err
-		}
-		result := browseResult{Sample: sample, Tags: tags}
+		result := browseResult{Sample: sample, Tags: tagsBySample[sample.ID]}
 		if browseResultMatches(result, normalizedQuery, normalizedRequired) {
 			results = append(results, result)
 		}

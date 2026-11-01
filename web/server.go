@@ -110,14 +110,19 @@ func (s *Server) handleSamples(w http.ResponseWriter, r *http.Request) {
 		samples = filterSamplesByQuery(samples, query)
 	}
 
-	out := make([]sampleResponse, 0, len(samples))
-	for _, sample := range samples {
-		tags, err := s.repo.ListTagsForSample(ctx, sample.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		out = append(out, sampleResponse{Sample: sample, Tags: tags})
+	sampleIDs := make([]int64, len(samples))
+	for i, sample := range samples {
+		sampleIDs[i] = sample.ID
+	}
+	tagsBySample, err := s.repo.ListTagsForSampleIDs(ctx, sampleIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	out := make([]sampleResponse, len(samples))
+	for i, sample := range samples {
+		out[i] = sampleResponse{Sample: sample, Tags: tagsBySample[sample.ID]}
 	}
 
 	writeJSON(w, http.StatusOK, out)
@@ -268,20 +273,56 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sampleCache := make(map[int64]sampleResponse)
-	out := make([]clusterResponse, 0, len(clusters))
-	for _, cluster := range clusters {
+	type clusterMembersEntry struct {
+		cluster core.Cluster
+		members []db.ClusterMember
+	}
+	allClusterMembers := make([]clusterMembersEntry, len(clusters))
+	allSampleIDsMap := make(map[int64]bool)
+
+	for i, cluster := range clusters {
 		members, err := s.repo.ListClusterMembers(r.Context(), cluster.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		response, err := s.buildClusterResponse(r.Context(), cluster, members, pointBySample, sampleCache)
+		allClusterMembers[i] = clusterMembersEntry{cluster: cluster, members: members}
+		for _, m := range members {
+			allSampleIDsMap[m.SampleID] = true
+		}
+	}
+
+	allSampleIDs := make([]int64, 0, len(allSampleIDsMap))
+	for id := range allSampleIDsMap {
+		allSampleIDs = append(allSampleIDs, id)
+	}
+
+	samplesMap, err := s.repo.FindSamplesByIDs(r.Context(), allSampleIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	tagsMap, err := s.repo.ListTagsForSampleIDs(r.Context(), allSampleIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	sampleCache := make(map[int64]sampleResponse, len(allSampleIDs))
+	for _, id := range allSampleIDs {
+		if s, ok := samplesMap[id]; ok {
+			sampleCache[id] = sampleResponse{Sample: s, Tags: tagsMap[id]}
+		}
+	}
+
+	out := make([]clusterResponse, len(clusters))
+	for i, entry := range allClusterMembers {
+		response, err := s.buildClusterResponse(r.Context(), entry.cluster, entry.members, pointBySample, sampleCache)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		out = append(out, response)
+		out[i] = response
 	}
 
 	writeJSON(w, http.StatusOK, out)

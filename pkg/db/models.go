@@ -156,6 +156,67 @@ func (r *Repository) FindSampleByID(ctx context.Context, id int64) (core.Sample,
 	return sample, nil
 }
 
+// FindSamplesByIDs retrieves multiple samples by their IDs in chunks.
+func (r *Repository) FindSamplesByIDs(ctx context.Context, ids []int64) (map[int64]core.Sample, error) {
+	result := make(map[int64]core.Sample, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(ids); i += batchSize {
+		end := i + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for j, id := range chunk {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		query := fmt.Sprintf(`
+			SELECT
+				id,
+				source_root,
+				path,
+				relative_path,
+				file_name,
+				extension,
+				format,
+				size_bytes,
+				modified_at,
+				scanned_at
+			FROM samples
+			WHERE id IN (%s);
+		`, strings.Join(placeholders, ","))
+
+		rows, err := r.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("find samples by ids: %w", err)
+		}
+
+		for rows.Next() {
+			sample, err := scanSample(rows)
+			if err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan sample: %w", err)
+			}
+			result[sample.ID] = sample
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterate samples by ids: %w", err)
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
+}
+
 func (r *Repository) DeleteSampleByID(ctx context.Context, id int64) error {
 	if _, err := r.db.ExecContext(ctx, `
 		DELETE FROM samples

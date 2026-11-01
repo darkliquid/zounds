@@ -17,6 +17,38 @@ const state = {
 
 const CLUSTER_VIEWBOX = { width: 1000, height: 700, padding: 60 };
 
+function getSampleID(s) {
+  return s.id ?? s.ID;
+}
+
+function getSampleFileName(s) {
+  return s.file_name ?? s.FileName;
+}
+
+function getSamplePath(s) {
+  return s.path ?? s.Path;
+}
+
+function getTagName(t) {
+  return t.normalized_name ?? t.NormalizedName ?? t.name ?? t.Name;
+}
+
+function getClusterID(c) {
+  return c.id ?? c.ID;
+}
+
+function getClusterLabel(c) {
+  return c.label ?? c.Label;
+}
+
+function getTagUsageName(entry) {
+  return entry.tag?.normalized_name ?? entry.Tag?.NormalizedName ?? entry.tag?.name ?? entry.Tag?.Name ?? "";
+}
+
+function getTagUsageCount(entry) {
+  return entry.sample_count ?? entry.SampleCount ?? 0;
+}
+
 async function loadJSON(path) {
   const response = await fetch(path);
   if (!response.ok) {
@@ -49,8 +81,8 @@ async function refreshSamples() {
 
 async function refreshClusters() {
   state.clusters = await loadJSON(`/api/clusters?projection=${encodeURIComponent(state.projection)}`);
-  if (!state.clusters.some((cluster) => cluster.ID === state.activeClusterId)) {
-    state.activeClusterId = state.clusters[0]?.ID ?? null;
+  if (!state.clusters.some((cluster) => getClusterID(cluster) === state.activeClusterId)) {
+    state.activeClusterId = state.clusters[0] ? getClusterID(state.clusters[0]) : null;
     state.activeClusterSampleId = null;
   }
   resetClusterViewport();
@@ -82,18 +114,20 @@ function renderSummary() {
 function renderTags() {
   const root = document.getElementById("tags");
   root.innerHTML = "";
-  const maxCount = state.tags.reduce((max, entry) => Math.max(max, entry.SampleCount), 1);
+  const maxCount = state.tags.reduce((max, entry) => Math.max(max, getTagUsageCount(entry)), 1);
 
   for (const entry of state.tags) {
+    const tagName = getTagUsageName(entry);
+    const count = getTagUsageCount(entry);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = entry.Tag.NormalizedName === state.tag ? "tag active" : "tag";
-    button.textContent = `${entry.Tag.NormalizedName} (${entry.SampleCount})`;
-    const scale = 0.9 + (entry.SampleCount / maxCount) * 0.8;
+    button.className = tagName === state.tag ? "tag active" : "tag";
+    button.textContent = `${tagName} (${count})`;
+    const scale = 0.9 + (count / maxCount) * 0.8;
     button.style.fontSize = `${scale}rem`;
-    button.style.opacity = `${0.65 + (entry.SampleCount / maxCount) * 0.35}`;
+    button.style.opacity = `${0.65 + (count / maxCount) * 0.35}`;
     button.addEventListener("click", async () => {
-      state.tag = entry.Tag.NormalizedName === state.tag ? "" : entry.Tag.NormalizedName;
+      state.tag = tagName === state.tag ? "" : tagName;
       await refreshSamples();
       renderTags();
     });
@@ -126,27 +160,30 @@ function renderClusters() {
 
   for (const entry of layout) {
     const cluster = entry.cluster;
+    const clusterID = getClusterID(cluster);
+    const clusterLabel = getClusterLabel(cluster);
     const size = (cluster.samples || []).length;
 
     const listItem = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.className = cluster.ID === state.activeClusterId ? "cluster-item active" : "cluster-item";
-    button.textContent = `${cluster.Label} (${size})`;
-    button.addEventListener("click", () => selectCluster(cluster.ID));
+    button.className = clusterID === state.activeClusterId ? "cluster-item active" : "cluster-item";
+    button.textContent = `${clusterLabel} (${size})`;
+    button.addEventListener("click", () => selectCluster(clusterID));
     listItem.appendChild(button);
     root.appendChild(listItem);
 
     for (const member of entry.members) {
+      const memberSampleID = getSampleID(member.sample);
       const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       dot.setAttribute("cx", member.point.x);
       dot.setAttribute("cy", member.point.y);
-      dot.setAttribute("r", member.sample.ID === state.activeClusterSampleId ? 7 : 4.5);
-      dot.setAttribute("class", member.sample.ID === state.activeClusterSampleId ? "cluster-member active" : "cluster-member");
-      dot.addEventListener("click", () => selectCluster(cluster.ID, member.sample.ID));
+      dot.setAttribute("r", memberSampleID === state.activeClusterSampleId ? 7 : 4.5);
+      dot.setAttribute("class", memberSampleID === state.activeClusterSampleId ? "cluster-member active" : "cluster-member");
+      dot.addEventListener("click", () => selectCluster(clusterID, memberSampleID));
 
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      title.textContent = member.sample.FileName;
+      title.textContent = getSampleFileName(member.sample);
       dot.appendChild(title);
       scene.appendChild(dot);
     }
@@ -156,15 +193,15 @@ function renderClusters() {
     bubble.setAttribute("cx", entry.center.x);
     bubble.setAttribute("cy", entry.center.y);
     bubble.setAttribute("r", radius);
-    bubble.setAttribute("class", cluster.ID === state.activeClusterId ? "cluster-bubble active" : "cluster-bubble");
-    bubble.addEventListener("click", () => selectCluster(cluster.ID));
+    bubble.setAttribute("class", clusterID === state.activeClusterId ? "cluster-bubble active" : "cluster-bubble");
+    bubble.addEventListener("click", () => selectCluster(clusterID));
     scene.appendChild(bubble);
 
     const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
     label.setAttribute("x", entry.center.x);
     label.setAttribute("y", entry.center.y);
     label.setAttribute("class", "cluster-label");
-    label.textContent = cluster.Label;
+    label.textContent = clusterLabel;
     scene.appendChild(label);
   }
 
@@ -261,7 +298,7 @@ function fallbackMemberPosition(center, index) {
 }
 
 function renderClusterSelection() {
-  const cluster = state.clusters.find((entry) => entry.ID === state.activeClusterId);
+  const cluster = state.clusters.find((entry) => getClusterID(entry) === state.activeClusterId);
   setHidden("cluster-selection-empty", Boolean(cluster));
   setHidden("cluster-selection", !cluster);
   if (!cluster) {
@@ -269,13 +306,14 @@ function renderClusterSelection() {
   }
 
   const members = cluster.members || [];
-  document.getElementById("cluster-title").textContent = cluster.Label;
+  document.getElementById("cluster-title").textContent = getClusterLabel(cluster);
   document.getElementById("cluster-summary").textContent = `${members.length} sample${members.length === 1 ? "" : "s"} in this cluster`;
 
   const root = document.getElementById("cluster-samples");
   root.innerHTML = "";
-  for (const sample of members) {
-    root.appendChild(createSampleRow(sample, sample.ID === state.activeClusterSampleId));
+  for (const member of members) {
+    const s = member.sample || member;
+    root.appendChild(createSampleRow(s, getSampleID(s) === state.activeClusterSampleId));
   }
 }
 
@@ -360,12 +398,12 @@ function createSampleRow(sample, highlighted = false) {
   meta.className = "sample-meta";
 
   const title = document.createElement("strong");
-  title.textContent = sample.FileName;
+  title.textContent = getSampleFileName(sample);
   meta.appendChild(title);
 
   const path = document.createElement("div");
   path.className = "sample-path";
-  path.textContent = sample.Path;
+  path.textContent = getSamplePath(sample);
   meta.appendChild(path);
 
   const tagWrap = document.createElement("div");
@@ -373,7 +411,7 @@ function createSampleRow(sample, highlighted = false) {
   for (const tag of sample.tags || []) {
     const span = document.createElement("span");
     span.className = "tag";
-    span.textContent = tag.NormalizedName;
+    span.textContent = getTagName(tag);
     tagWrap.appendChild(span);
   }
   meta.appendChild(tagWrap);
@@ -381,7 +419,7 @@ function createSampleRow(sample, highlighted = false) {
   const player = document.createElement("audio");
   player.controls = true;
   player.preload = "none";
-  player.src = `/api/samples/${sample.ID}/audio`;
+  player.src = `/api/samples/${getSampleID(sample)}/audio`;
   meta.appendChild(player);
 
   li.appendChild(meta);
@@ -433,7 +471,7 @@ async function main() {
   ]);
   state.tags = tags;
   state.clusters = clusters;
-  state.activeClusterId = state.clusters[0]?.ID ?? null;
+  state.activeClusterId = state.clusters[0] ? getClusterID(state.clusters[0]) : null;
 
   setBrowser("search");
   renderTags();

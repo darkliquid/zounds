@@ -25,9 +25,23 @@ func ProjectTSNE2D(vectors []core.FeatureVector, options TSNEOptions) ([]Project
 	if err := validateProjectionVectors(vectors); err != nil {
 		return nil, err
 	}
+	if len(vectors) == 1 {
+		return []ProjectionPoint{
+			{
+				SampleID: vectors[0].SampleID,
+				X:        0,
+				Y:        0,
+			},
+		}, nil
+	}
 
 	if options.Perplexity <= 0 {
 		options.Perplexity = 20
+	}
+	if n := len(vectors); n > 1 {
+		if maxPerp := float64(n - 1); options.Perplexity >= maxPerp {
+			options.Perplexity = math.Max(1.0, maxPerp-1e-4)
+		}
 	}
 	if options.Iterations <= 0 {
 		options.Iterations = 500
@@ -195,7 +209,17 @@ func symmetricAffinities(distances [][]float64, perplexity float64) [][]float64 
 }
 
 func perplexityRow(distances []float64, self int, perplexity float64) []float64 {
-	row := make([]float64, len(distances))
+	n := len(distances)
+	row := make([]float64, n)
+	if n <= 1 {
+		return row
+	}
+	if maxPerp := float64(n - 1); perplexity >= maxPerp {
+		perplexity = math.Max(1.0, maxPerp-1e-4)
+	}
+	if perplexity <= 0 {
+		perplexity = 1.0
+	}
 	targetEntropy := math.Log(perplexity)
 	beta := 1.0
 	minBeta := math.Inf(-1)
@@ -216,7 +240,13 @@ func perplexityRow(distances []float64, self int, perplexity float64) []float64 
 			sum += value
 		}
 		if sum == 0 {
-			break
+			maxBeta = beta
+			if math.IsInf(minBeta, -1) {
+				beta /= 2
+			} else {
+				beta = (beta + minBeta) / 2
+			}
+			continue
 		}
 		for j, value := range raw {
 			if j == self || value == 0 {
@@ -256,6 +286,41 @@ func perplexityRow(distances []float64, self int, perplexity float64) []float64 
 		sum += row[j]
 	}
 	if sum == 0 {
+		// Numerical fallback using min-distance shift trick if all distances are large
+		minDist := math.Inf(1)
+		for j, distance := range distances {
+			if j == self {
+				continue
+			}
+			if distance < minDist {
+				minDist = distance
+			}
+		}
+		if !math.IsInf(minDist, 1) {
+			for j, distance := range distances {
+				if j == self {
+					continue
+				}
+				row[j] = math.Exp(-(distance - minDist) * beta)
+				sum += row[j]
+			}
+		}
+	}
+	if sum == 0 {
+		count := 0
+		for j := range row {
+			if j != self {
+				count++
+			}
+		}
+		if count > 0 {
+			uniform := 1.0 / float64(count)
+			for j := range row {
+				if j != self {
+					row[j] = uniform
+				}
+			}
+		}
 		return row
 	}
 	for j := range row {

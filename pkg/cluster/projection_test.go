@@ -64,3 +64,56 @@ func TestProjectTSNE2DProducesFiniteCoordinates(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectTSNE2DSmallN(t *testing.T) {
+	t.Parallel()
+
+	for _, count := range []int{1, 2, 3, 5} {
+		vectors := make([]core.FeatureVector, count)
+		for i := 0; i < count; i++ {
+			vectors[i] = core.FeatureVector{
+				SampleID: int64(i + 1),
+				Values:   []float64{float64(i * 10), float64(i * 5)},
+			}
+		}
+
+		// Use default options where Perplexity defaults to 20, exceeding N-1.
+		points, err := cluster.ProjectTSNE2D(vectors, cluster.TSNEOptions{Iterations: 100})
+		if err != nil {
+			t.Fatalf("N=%d: unexpected error: %v", count, err)
+		}
+		if len(points) != count {
+			t.Fatalf("N=%d: expected %d points, got %d", count, count, len(points))
+		}
+		for _, p := range points {
+			if math.IsNaN(p.X) || math.IsNaN(p.Y) || math.IsInf(p.X, 0) || math.IsInf(p.Y, 0) {
+				t.Fatalf("N=%d: non-finite coordinate in point %+v", count, p)
+			}
+		}
+	}
+}
+
+func TestProjectTSNE2DLargeDistances(t *testing.T) {
+	t.Parallel()
+
+	// Points separated by Euclidean distance > 50 (squared distance > 2500 >> 745)
+	vectors := []core.FeatureVector{
+		{SampleID: 1, Values: []float64{0, 0}},
+		{SampleID: 2, Values: []float64{500, 0}},
+		{SampleID: 3, Values: []float64{0, 500}},
+		{SampleID: 4, Values: []float64{500, 500}},
+	}
+
+	points, err := cluster.ProjectTSNE2D(vectors, cluster.TSNEOptions{Iterations: 200})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(points) != 4 {
+		t.Fatalf("expected 4 points, got %d", len(points))
+	}
+	for _, p := range points {
+		if math.IsNaN(p.X) || math.IsNaN(p.Y) || math.IsInf(p.X, 0) || math.IsInf(p.Y, 0) {
+			t.Fatalf("non-finite coordinate in point %+v", p)
+		}
+	}
+}

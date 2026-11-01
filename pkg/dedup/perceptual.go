@@ -2,9 +2,10 @@ package dedup
 
 import (
 	"fmt"
+	"math/bits"
 	"sort"
+	"strconv"
 
-	"github.com/darkliquid/zounds/pkg/analysis"
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
@@ -42,71 +43,171 @@ func (f PerceptualFinder) Find(hashes []PerceptualHash) ([]PerceptualGroup, erro
 		return nil, nil
 	}
 
-	parent := make([]int, len(hashes))
-	for i := range parent {
-		parent[i] = i
-	}
-
-	find := func(x int) int {
-		for parent[x] != x {
-			parent[x] = parent[parent[x]]
-			x = parent[x]
+	parsed := make([]uint64, len(hashes))
+	for i, h := range hashes {
+		val, err := strconv.ParseUint(h.Hash, 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("compare perceptual hashes for %q: parse hash %q: %w", h.Sample.Path, h.Hash, err)
 		}
-		return x
+		parsed[i] = val
 	}
 
-	union := func(a, b int) {
-		rootA := find(a)
-		rootB := find(b)
-		if rootA != rootB {
-			parent[rootB] = rootA
-		}
+	dist := func(i, j int) int {
+		return bits.OnesCount64(parsed[i] ^ parsed[j])
 	}
 
-	for i := 0; i < len(hashes); i++ {
-		for j := i + 1; j < len(hashes); j++ {
-			distance, err := analysis.HammingDistanceHex(hashes[i].Hash, hashes[j].Hash)
-			if err != nil {
-				return nil, fmt.Errorf("compare perceptual hashes for %q and %q: %w", hashes[i].Sample.Path, hashes[j].Sample.Path, err)
+	// 4x16-bit LSH buckets:
+	// A 64-bit fingerprint is partitioned into 4 16-bit chunks.
+	var tables [4]map[uint16][]int
+	for t := 0; t < 4; t++ {
+		tables[t] = make(map[uint16][]int)
+	}
+	for i, v := range parsed {
+		c0 := uint16(v & 0xffff)
+		c1 := uint16((v >> 16) & 0xffff)
+		c2 := uint16((v >> 32) & 0xffff)
+		c3 := uint16((v >> 48) & 0xffff)
+		tables[0][c0] = append(tables[0][c0], i)
+		tables[1][c1] = append(tables[1][c1], i)
+		tables[2][c2] = append(tables[2][c2], i)
+		tables[3][c3] = append(tables[3][c3], i)
+	}
+
+	neighbors := make([][]int, len(hashes))
+	if len(hashes) <= 500 {
+		// For small collections, exhaustively check all pairs to guarantee 100% recall
+		for i := 0; i < len(hashes); i++ {
+			for j := i + 1; j < len(hashes); j++ {
+				if d := dist(i, j); d <= f.MaxDistance {
+					neighbors[i] = append(neighbors[i], j)
+					neighbors[j] = append(neighbors[j], i)
+				}
 			}
-			if distance <= f.MaxDistance {
-				union(i, j)
+		}
+	} else {
+		// For large collections, generate candidate pairs from 4x16-bit LSH collisions
+		checked := make(map[uint64]struct{})
+		for t := 0; t < 4; t++ {
+			for _, bucket := range tables[t] {
+				if len(bucket) < 2 {
+					continue
+				}
+				for bi := 0; bi < len(bucket); bi++ {
+					for bj := bi + 1; bj < len(bucket); bj++ {
+						u, v := bucket[bi], bucket[bj]
+						if u > v {
+							u, v = v, u
+						}
+						pairKey := (uint64(u) << 32) | uint64(v)
+						if _, exists := checked[pairKey]; exists {
+							continue
+						}
+						checked[pairKey] = struct{}{}
+						if d := dist(u, v); d <= f.MaxDistance {
+							neighbors[u] = append(neighbors[u], v)
+							neighbors[v] = append(neighbors[v], u)
+						}
+					}
+				}
 			}
 		}
 	}
 
-	groupMembers := make(map[int][]int)
-	for i := range hashes {
-		root := find(i)
-		groupMembers[root] = append(groupMembers[root], i)
-	}
-
+	// Bounded-Diameter Grouping (Clique Partitioning):
+	// Form duplicate groups such that every pair of samples in a group has distance <= MaxDistance.
+	// This strictly bounds the diameter to <= MaxDistance and eliminates transitive chaining.
+	assigned := make([]bool, len(hashes))
 	var groups []PerceptualGroup
-	for _, members := range groupMembers {
-		if len(members) < 2 {
-			continue
+
+	for {
+		// Find unassigned seed with the most unassigned neighbors (densest cluster first)
+		bestSeed := -1
+		bestUnassignedCount := -1
+
+		for i := 0; i < len(hashes); i++ {
+			if assigned[i] {
+				continue
+			}
+			unassignedCount := 0
+			for _, n := range neighbors[i] {
+				if !assigned[n] {
+					unassignedCount++
+				}
+			}
+			if unassignedCount > bestUnassignedCount ||
+				(unassignedCount == bestUnassignedCount && bestSeed >= 0 && hashes[i].Sample.Path < hashes[bestSeed].Sample.Path) {
+				bestSeed = i
+				bestUnassignedCount = unassignedCount
+			}
 		}
-		sort.Slice(members, func(i, j int) bool {
-			return hashes[members[i]].Sample.Path < hashes[members[j]].Sample.Path
+
+		if bestSeed < 0 || bestUnassignedCount == 0 {
+			break
+		}
+
+		// Candidate group starting with bestSeed
+		groupMembers := []int{bestSeed}
+
+		// Filter candidate neighbors that are unassigned
+		var candNeighbors []int
+		for _, n := range neighbors[bestSeed] {
+			if !assigned[n] {
+				candNeighbors = append(candNeighbors, n)
+			}
+		}
+
+		// Sort candidate neighbors by distance to seed ascending, then by sample path
+		sort.Slice(candNeighbors, func(i, j int) bool {
+			di := dist(bestSeed, candNeighbors[i])
+			dj := dist(bestSeed, candNeighbors[j])
+			if di != dj {
+				return di < dj
+			}
+			return hashes[candNeighbors[i]].Sample.Path < hashes[candNeighbors[j]].Sample.Path
 		})
 
-		referenceIndex := members[0]
-		group := PerceptualGroup{
-			Reference: hashes[referenceIndex].Sample,
-			Hash:      hashes[referenceIndex].Hash,
-			Matches:   make([]PerceptualMatch, 0, len(members)-1),
+		// Add candidates that preserve the bounded diameter (distance <= MaxDistance to ALL members)
+		for _, cand := range candNeighbors {
+			bounded := true
+			for _, m := range groupMembers {
+				if dist(cand, m) > f.MaxDistance {
+					bounded = false
+					break
+				}
+			}
+			if bounded {
+				groupMembers = append(groupMembers, cand)
+			}
 		}
 
-		for _, memberIndex := range members[1:] {
-			distance, err := analysis.HammingDistanceHex(hashes[referenceIndex].Hash, hashes[memberIndex].Hash)
-			if err != nil {
-				return nil, err
-			}
+		if len(groupMembers) < 2 {
+			assigned[bestSeed] = true
+			continue
+		}
+
+		for _, m := range groupMembers {
+			assigned[m] = true
+		}
+
+		// Deterministic reference selection by sample path
+		sort.Slice(groupMembers, func(i, j int) bool {
+			return hashes[groupMembers[i]].Sample.Path < hashes[groupMembers[j]].Sample.Path
+		})
+
+		refIndex := groupMembers[0]
+		group := PerceptualGroup{
+			Reference: hashes[refIndex].Sample,
+			Hash:      hashes[refIndex].Hash,
+			Matches:   make([]PerceptualMatch, 0, len(groupMembers)-1),
+		}
+
+		for _, m := range groupMembers[1:] {
+			d := dist(refIndex, m)
 			group.Matches = append(group.Matches, PerceptualMatch{
-				Sample:     hashes[memberIndex].Sample,
-				Hash:       hashes[memberIndex].Hash,
-				Distance:   distance,
-				Similarity: 1 - float64(distance)/64.0,
+				Sample:     hashes[m].Sample,
+				Hash:       hashes[m].Hash,
+				Distance:   d,
+				Similarity: 1.0 - float64(d)/64.0,
 			})
 		}
 

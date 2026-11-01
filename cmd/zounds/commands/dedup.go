@@ -51,6 +51,12 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 			}
 
 			keepStrategy := dedup.KeepStrategy(strategy)
+			switch keepStrategy {
+			case dedup.KeepFirstPath, dedup.KeepOldest, dedup.KeepNewest, dedup.KeepBestQuality:
+			default:
+				return fmt.Errorf("invalid --keep strategy %q: must be one of first-path, oldest, newest, best-quality", strategy)
+			}
+
 			var actions []dedup.CullAction
 			if exact {
 				finder := dedup.NewExactFinder(cfg.Concurrency, logger)
@@ -60,7 +66,7 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 				}
 				actions = dedup.PlanCull(groups, keepStrategy)
 			} else {
-				hashes, err := buildPerceptualHashes(ctx, samples, cmd.ErrOrStderr(), logger, cfg.Concurrency)
+				hashes, err := buildPerceptualHashes(ctx, repo, samples, cmd.ErrOrStderr(), logger, cfg.Concurrency)
 				if err != nil {
 					return err
 				}
@@ -91,12 +97,42 @@ func newDedupCommand(cfg *Config) *cobra.Command {
 	flags.BoolVar(&perceptual, "perceptual", false, "find near-duplicates by perceptual hash")
 	flags.IntVar(&threshold, "threshold", 8, "maximum Hamming distance for perceptual dedup")
 	flags.BoolVar(&deleteMode, "delete", false, "delete files selected for removal")
-	flags.StringVar(&strategy, "keep", string(dedup.KeepFirstPath), "keep strategy: first-path, oldest, newest")
+	flags.StringVar(&strategy, "keep", string(dedup.KeepFirstPath), "keep strategy: first-path, oldest, newest, best-quality")
 
 	return cmd
 }
 
-func buildPerceptualHashes(ctx context.Context, samples []core.Sample, errOut io.Writer, logger *log.Logger, concurrency int) ([]dedup.PerceptualHash, error) {
+func buildPerceptualHashes(ctx context.Context, repo *db.Repository, samples []core.Sample, errOut io.Writer, logger *log.Logger, concurrency int) ([]dedup.PerceptualHash, error) {
+	existingHashes, err := repo.ListPerceptualHashes(ctx, "spectral-8x8")
+	existingBySampleID := make(map[int64]string)
+	if err == nil {
+		for _, h := range existingHashes {
+			if h.Hash != "" {
+				existingBySampleID[h.SampleID] = h.Hash
+			}
+		}
+	}
+
+	var (
+		hashes         = make([]dedup.PerceptualHash, 0, len(samples))
+		missingSamples []core.Sample
+	)
+
+	for _, sample := range samples {
+		if hashVal, ok := existingBySampleID[sample.ID]; ok {
+			hashes = append(hashes, dedup.PerceptualHash{
+				Sample: sample,
+				Hash:   hashVal,
+			})
+		} else {
+			missingSamples = append(missingSamples, sample)
+		}
+	}
+
+	if len(missingSamples) == 0 {
+		return hashes, nil
+	}
+
 	analyzer, err := analysis.NewPerceptualHashAnalyzer(nil)
 	if err != nil {
 		return nil, err
@@ -105,11 +141,10 @@ func buildPerceptualHashes(ctx context.Context, samples []core.Sample, errOut io
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	if concurrency > len(samples) {
-		concurrency = len(samples)
+	if concurrency > len(missingSamples) {
+		concurrency = len(missingSamples)
 	}
 
-	hashes := make([]dedup.PerceptualHash, 0, len(samples))
 	var (
 		mu       sync.Mutex
 		firstErr error
@@ -141,17 +176,28 @@ func buildPerceptualHashes(ctx context.Context, samples []core.Sample, errOut io
 					setErr(err)
 					return
 				}
+				hashVal := result.Attributes["perceptual_hash"]
+				algo := result.Attributes["hash_algorithm"]
+				bits := int(result.Metrics["hash_bits"])
+				if hashVal != "" && algo != "" {
+					_ = repo.UpsertPerceptualHash(ctx, core.PerceptualHash{
+						SampleID:  sample.ID,
+						Algorithm: algo,
+						Hash:      hashVal,
+						HashBits:  bits,
+					})
+				}
 				mu.Lock()
 				hashes = append(hashes, dedup.PerceptualHash{
 					Sample: sample,
-					Hash:   result.Attributes["perceptual_hash"],
+					Hash:   hashVal,
 				})
 				mu.Unlock()
 			}
 		}()
 	}
 
-	for _, sample := range samples {
+	for _, sample := range missingSamples {
 		jobs <- sample
 	}
 	close(jobs)

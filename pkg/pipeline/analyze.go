@@ -210,6 +210,24 @@ func PersistAnalysisOutput(ctx context.Context, repo *db.Repository, sample core
 		return err
 	}
 
+	for _, res := range output.Results {
+		if res.Analyzer == "perceptual_hash" {
+			hashVal := res.Attributes["perceptual_hash"]
+			algo := res.Attributes["hash_algorithm"]
+			bits := int(res.Metrics["hash_bits"])
+			if hashVal != "" && algo != "" {
+				if err := repo.UpsertPerceptualHash(ctx, core.PerceptualHash{
+					SampleID:  sample.ID,
+					Algorithm: algo,
+					Hash:      hashVal,
+					HashBits:  bits,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

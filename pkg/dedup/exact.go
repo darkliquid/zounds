@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/darkliquid/zounds/pkg/core"
@@ -19,9 +20,10 @@ import (
 type KeepStrategy string
 
 const (
-	KeepFirstPath KeepStrategy = "first-path"
-	KeepOldest    KeepStrategy = "oldest"
-	KeepNewest    KeepStrategy = "newest"
+	KeepFirstPath   KeepStrategy = "first-path"
+	KeepOldest      KeepStrategy = "oldest"
+	KeepNewest      KeepStrategy = "newest"
+	KeepBestQuality KeepStrategy = "best-quality"
 )
 
 type ExactFinder struct {
@@ -272,9 +274,59 @@ func sortSamplesForStrategy(samples []core.Sample, strategy KeepStrategy) {
 			}
 			return samples[i].ModifiedAt.After(samples[j].ModifiedAt)
 		})
+	case KeepBestQuality:
+		sort.Slice(samples, func(i, j int) bool {
+			qi := sampleQualityScore(samples[i])
+			qj := sampleQualityScore(samples[j])
+			if qi != qj {
+				return qi > qj
+			}
+			if samples[i].SizeBytes != samples[j].SizeBytes {
+				return samples[i].SizeBytes > samples[j].SizeBytes
+			}
+			return samples[i].Path < samples[j].Path
+		})
 	default:
 		sort.Slice(samples, func(i, j int) bool {
 			return samples[i].Path < samples[j].Path
 		})
 	}
+}
+
+func sampleQualityScore(s core.Sample) int {
+	score := 0
+	switch s.Format {
+	case core.FormatWAV, core.FormatAIFF:
+		score = 1000000
+	case core.FormatFLAC:
+		score = 900000
+	case core.FormatOGG:
+		score = 500000
+	case core.FormatAAC, core.FormatM4A:
+		score = 450000
+	case core.FormatMP3:
+		score = 400000
+	default:
+		score = 100000
+	}
+
+	if s.Metadata != nil {
+		if srStr, ok := s.Metadata["sample_rate"]; ok {
+			if sr, err := strconv.Atoi(srStr); err == nil && sr > 0 {
+				score += sr
+			}
+		}
+		if bdStr, ok := s.Metadata["bit_depth"]; ok {
+			if bd, err := strconv.Atoi(bdStr); err == nil && bd > 0 {
+				score += bd * 1000
+			}
+		}
+		if chStr, ok := s.Metadata["channels"]; ok {
+			if ch, err := strconv.Atoi(chStr); err == nil && ch > 0 {
+				score += ch * 100
+			}
+		}
+	}
+
+	return score
 }

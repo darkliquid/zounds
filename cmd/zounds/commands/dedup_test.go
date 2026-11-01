@@ -157,3 +157,90 @@ func TestDedupCommandPerceptualSkipsUndecodableSamplesWithWarning(t *testing.T) 
 		t.Fatalf("expected warning for %q in stderr: %q", badM4A, stderr.String())
 	}
 }
+
+func TestDedupCommandPerceptualKeepBestQuality(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "dedup-quality.db")
+	lowRes := filepath.Join(root, "low.wav")
+	highRes := filepath.Join(root, "high.wav")
+
+	// Both are 440 Hz sines (near duplicates)
+	// highRes is 44100 Hz, 1.0s (larger size)
+	// lowRes is 22050 Hz, 1.0s (smaller size)
+	writeSineWAVFixture(t, highRes, 440, 1.0)
+	writeSineWAVFixtureWithRate(t, lowRes, 440, 1.0, 22050)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	cmd := commands.NewRootCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"--db", dbPath, "--dry-run", "dedup", "--perceptual", "--keep", "best-quality"})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("dedup perceptual: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "keep\t"+highRes) {
+		t.Fatalf("expected highRes to be kept in output:\n%s", out)
+	}
+	if !strings.Contains(out, "remove\t"+lowRes) {
+		t.Fatalf("expected lowRes to be removed in output:\n%s", out)
+	}
+}
+
+func TestDedupCommandPerceptualUsesPersistedHashes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "dedup-persisted.db")
+	one := filepath.Join(root, "one.wav")
+	two := filepath.Join(root, "two.wav")
+
+	writeSineWAVFixture(t, one, 440, 1.0)
+	writeSineWAVFixture(t, two, 440, 1.0)
+
+	scan := commands.NewRootCommand()
+	scan.SetArgs([]string{"--db", dbPath, "scan", root})
+	if err := scan.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	// Run analyze to compute and persist perceptual hashes
+	analyze := commands.NewRootCommand()
+	analyze.SetArgs([]string{"--db", dbPath, "analyze", "--all"})
+	if err := analyze.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	repo := openRepoForTest(t, dbPath)
+	storedHashes, err := repo.ListPerceptualHashes(context.Background(), "spectral-8x8")
+	if err != nil {
+		t.Fatalf("list hashes: %v", err)
+	}
+	if len(storedHashes) != 2 {
+		t.Fatalf("expected 2 persisted perceptual hashes, got %d", len(storedHashes))
+	}
+
+	// Now run dedup --perceptual, which should read the persisted hashes
+	cmd := commands.NewRootCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"--db", dbPath, "--dry-run", "dedup", "--perceptual"})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("dedup: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "keep\t") || !strings.Contains(out, "remove\t") {
+		t.Fatalf("expected duplicate pair in output:\n%s", out)
+	}
+}

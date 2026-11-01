@@ -52,6 +52,7 @@ func DefaultAnalyzers(registry *zaudio.Registry) ([]core.Analyzer, error) {
 		func() (core.Analyzer, error) { return analysis.NewMFCCAnalyzer(registry) },
 		func() (core.Analyzer, error) { return analysis.NewLoopAnalyzer(registry) },
 		func() (core.Analyzer, error) { return analysis.NewChordAnalyzer(registry) },
+		func() (core.Analyzer, error) { return analysis.NewPerceptualHashAnalyzer(registry) },
 	}
 
 	analyzers := make([]core.Analyzer, 0, len(factory))

@@ -414,6 +414,38 @@ func writeSineWAVFixture(t *testing.T, path string, frequency, seconds float64) 
 	}
 }
 
+func writeSineWAVFixtureWithRate(t *testing.T, path string, frequency, seconds float64, sampleRate int) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sine wav fixture: %v", err)
+	}
+
+	frames := int(float64(sampleRate) * seconds)
+	data := make([]float64, frames)
+	for i := range data {
+		data[i] = 0.6 * math.Sin(2*math.Pi*frequency*float64(i)/float64(sampleRate))
+	}
+
+	buffer := zaudio.PCMBuffer{
+		SampleRate: sampleRate,
+		Channels:   1,
+		BitDepth:   16,
+		Data:       data,
+	}
+	if err := wav.New().Encode(context.Background(), file, buffer); err != nil {
+		t.Fatalf("encode sine wav fixture: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close sine wav fixture: %v", err)
+	}
+}
+
 func openRepoForTest(t *testing.T, dbPath string) *db.Repository {
 	t.Helper()
 

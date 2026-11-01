@@ -3,6 +3,8 @@ package analysis
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/bits"
 	"strconv"
 	"time"
 
@@ -13,7 +15,7 @@ import (
 	"github.com/darkliquid/zounds/pkg/core"
 )
 
-const perceptualHashAnalyzerVersion = "0.1.0"
+const perceptualHashAnalyzerVersion = "0.2.0"
 
 type PerceptualHashAnalyzer struct {
 	registry *zaudio.Registry
@@ -83,28 +85,26 @@ func HammingDistanceHex(left, right string) (int, error) {
 		return 0, fmt.Errorf("parse right hash: %w", err)
 	}
 
-	diff := leftValue ^ rightValue
-	distance := 0
-	for diff > 0 {
-		distance += int(diff & 1)
-		diff >>= 1
-	}
-	return distance, nil
+	return bits.OnesCount64(leftValue ^ rightValue), nil
 }
 
+var perceptualBandEdges = []float64{130, 210, 340, 550, 890, 1440, 2330, 4000}
+
 func computePerceptualHash(buffer zaudio.PCMBuffer) (PerceptualHash, error) {
-	mono := zaudio.PCMBuffer{
-		SampleRate: buffer.SampleRate,
-		Channels:   1,
-		BitDepth:   buffer.BitDepth,
-		Data:       mixDownMono(buffer),
-	}
-	if len(mono.Data) < 16 || mono.SampleRate <= 0 {
+	monoData := mixDownMono(buffer)
+	if len(monoData) < 16 || buffer.SampleRate <= 0 {
 		return PerceptualHash{
 			Algorithm: "spectral-8x8",
 			Bits:      64,
 			Value:     "0000000000000000",
 		}, nil
+	}
+
+	mono := zaudio.PCMBuffer{
+		SampleRate: buffer.SampleRate,
+		Channels:   1,
+		BitDepth:   buffer.BitDepth,
+		Data:       monoData,
 	}
 
 	if mono.SampleRate != 8000 {
@@ -115,84 +115,116 @@ func computePerceptualHash(buffer zaudio.PCMBuffer) (PerceptualHash, error) {
 		mono = resampled
 	}
 
-	const windows = 8
-	const bands = windows * windows
-
-	bandEnergies := perceptualBands(mono.Data, bands)
-	var meanEnergy float64
-	for _, energy := range bandEnergies {
-		meanEnergy += energy
+	var maxAbs float64
+	for _, v := range mono.Data {
+		if abs := math.Abs(v); abs > maxAbs {
+			maxAbs = abs
+		}
 	}
-	meanEnergy /= float64(len(bandEnergies))
+	if maxAbs < 1e-6 {
+		return PerceptualHash{
+			Algorithm: "spectral-8x8",
+			Bits:      64,
+			Value:     "0000000000000000",
+		}, nil
+	}
 
-	var bits uint64
-	for band, energy := range bandEnergies {
-		if energy >= meanEnergy {
-			bits |= 1 << uint(band)
+	const (
+		numWindows = 8
+		numBands   = 8
+	)
+
+	n := len(mono.Data)
+	var (
+		energies    [numWindows][numBands]float64
+		logEnergies [numWindows][numBands]float64
+		totalEnergy float64
+		sumLog      float64
+	)
+
+	for t := 0; t < numWindows; t++ {
+		start := t * n / numWindows
+		end := (t + 1) * n / numWindows
+		segLen := end - start
+		if segLen <= 0 {
+			for b := 0; b < numBands; b++ {
+				logEnergies[t][b] = math.Log(1e-12)
+				sumLog += logEnergies[t][b]
+			}
+			continue
+		}
+
+		seg := mono.Data[start:end]
+		fftSize := nextPowerOfTwo(segLen)
+		if fftSize < 256 {
+			fftSize = 256
+		} else if fftSize > 4096 {
+			fftSize = 4096
+			if segLen > fftSize {
+				seg = seg[:fftSize]
+				segLen = fftSize
+			}
+		}
+
+		frame := make([]float64, fftSize)
+		copy(frame, seg)
+		if segLen > 1 {
+			for i := 0; i < segLen; i++ {
+				frame[i] *= 0.5 * (1.0 - math.Cos(2.0*math.Pi*float64(i)/float64(segLen-1)))
+			}
+		}
+
+		fft := fourier.NewFFT(fftSize)
+		mags := magnitudeSpectrum(fft.Coefficients(nil, frame))
+
+		var bandEnergies [numBands]float64
+		for k := 1; k < len(mags); k++ {
+			freq := float64(k) * 8000.0 / float64(fftSize)
+			band := 0
+			for band < numBands-1 && freq >= perceptualBandEdges[band] {
+				band++
+			}
+			bandEnergies[band] += mags[k] * mags[k]
+		}
+
+		for b := 0; b < numBands; b++ {
+			energies[t][b] = bandEnergies[b]
+			totalEnergy += bandEnergies[b]
+		}
+	}
+
+	if totalEnergy <= 0 {
+		return PerceptualHash{
+			Algorithm: "spectral-8x8",
+			Bits:      64,
+			Value:     "0000000000000000",
+		}, nil
+	}
+
+	for t := 0; t < numWindows; t++ {
+		for b := 0; b < numBands; b++ {
+			normE := energies[t][b] / totalEnergy
+			logE := math.Log(normE + 1e-12)
+			logEnergies[t][b] = logE
+			sumLog += logE
+		}
+	}
+
+	meanLog := sumLog / float64(numWindows*numBands)
+
+	var hashBits uint64
+	for t := 0; t < numWindows; t++ {
+		for b := 0; b < numBands; b++ {
+			if logEnergies[t][b] >= meanLog {
+				bitIndex := uint(t*numBands + b)
+				hashBits |= (uint64(1) << bitIndex)
+			}
 		}
 	}
 
 	return PerceptualHash{
 		Algorithm: "spectral-8x8",
 		Bits:      64,
-		Value:     fmt.Sprintf("%016x", bits),
+		Value:     fmt.Sprintf("%016x", hashBits),
 	}, nil
-}
-
-func perceptualBands(samples []float64, bands int) []float64 {
-	if len(samples) == 0 {
-		return make([]float64, bands)
-	}
-
-	if len(samples) > 8192 {
-		samples = samples[:8192]
-	}
-
-	windowSize := nextPowerOfTwo(len(samples))
-	if windowSize < 256 {
-		windowSize = 256
-	}
-
-	frame := make([]float64, windowSize)
-	copy(frame, samples)
-	applyHannWindow(frame)
-
-	fft := fourier.NewFFT(windowSize)
-	mags := magnitudeSpectrum(fft.Coefficients(nil, frame))
-	energies := make([]float64, bands)
-	if len(mags) <= 1 {
-		return energies
-	}
-
-	bandWidth := max(1, (len(mags)-1)/bands)
-	for i := 1; i < len(mags); i++ {
-		band := min(bands-1, (i-1)/bandWidth)
-		energies[band] += mags[i] * mags[i]
-	}
-
-	var total float64
-	for _, value := range energies {
-		total += value
-	}
-	if total > 0 {
-		for i := range energies {
-			energies[i] /= total
-		}
-	}
-
-	return energies
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

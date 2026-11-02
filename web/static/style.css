@@ -112,6 +112,60 @@ button.tag.active {
   background: #0f766e;
 }
 
+.sample-tag-editor {
+  align-items: center;
+}
+
+.tag-editable {
+  gap: 0.35rem;
+  padding-right: 0.35rem;
+}
+
+.tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(17, 24, 39, 0.45);
+  color: #d1d5db;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.tag-remove:hover,
+.tag-remove:focus-visible {
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+
+.tag-remove:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.tag-input {
+  min-width: 10rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #4b5563;
+  border-radius: 999px;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 0.9rem;
+}
+
+.tag-input:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.tag-input:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .plain-list,
 .sample-list {
   list-style: none;

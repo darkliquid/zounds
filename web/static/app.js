@@ -17,6 +17,7 @@ const state = {
   samples: [],
   tags: [],
   clusters: [],
+  savingTags: new Set(),
   activeClusterId: null,
   activeClusterSampleId: null,
   clusterViewport: {
@@ -451,6 +452,81 @@ function bindClusterInteractions() {
   }, { passive: false });
 }
 
+function sampleTagNames(sample) {
+  return (sample.tags || []).map(getTagName);
+}
+
+function setSampleTagsEverywhere(sampleID, tags) {
+  for (const entry of state.samples) {
+    if (getSampleID(entry) === sampleID) {
+      entry.tags = tags;
+    }
+  }
+  for (const cluster of state.clusters) {
+    for (const member of cluster.members || []) {
+      const memberSample = member.sample || member;
+      if (getSampleID(memberSample) === sampleID) {
+        memberSample.tags = tags;
+      }
+    }
+  }
+}
+
+async function saveSampleTags(sample, names) {
+  const sampleID = getSampleID(sample);
+  if (state.savingTags.has(sampleID)) {
+    return false;
+  }
+  state.savingTags.add(sampleID);
+
+  let saveError = null;
+  try {
+    const response = await fetch(`/api/samples/${encodeURIComponent(sampleID)}/tags`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags: names }),
+    });
+    if (!response.ok) {
+      const message = (await response.text()).trim();
+      throw new Error(message || `request failed: ${response.status}`);
+    }
+
+    const updated = await response.json();
+    const tags = updated.tags || [];
+    sample.tags = tags;
+    setSampleTagsEverywhere(sampleID, tags);
+    state.tags = await loadJSON("/api/tags");
+    renderTags();
+    if (state.browser === "search") {
+      await refreshSamples();
+    } else {
+      renderClusterSelection();
+    }
+  } catch (error) {
+    saveError = error;
+  } finally {
+    state.savingTags.delete(sampleID);
+  }
+
+  if (saveError) {
+    document.getElementById("summary").textContent = `Tag update failed: ${saveError.message}`;
+    console.error(saveError);
+    if (state.browser === "search") {
+      renderSamples();
+    } else {
+      renderClusterSelection();
+    }
+    return false;
+  }
+  return true;
+}
+
+function setTagEditorDisabled(tagWrap, disabled) {
+  for (const control of tagWrap.querySelectorAll("button, input")) {
+    control.disabled = disabled;
+  }
+}
+
 function createSampleRow(sample, highlighted = false) {
   const li = document.createElement("li");
   li.className = highlighted ? "sample-row active" : "sample-row";
@@ -525,13 +601,57 @@ function createSampleRow(sample, highlighted = false) {
   meta.appendChild(path);
 
   const tagWrap = document.createElement("div");
-  tagWrap.className = "tag-cloud";
+  tagWrap.className = "tag-cloud sample-tag-editor";
+  const tagsSaving = state.savingTags.has(getSampleID(sample));
   for (const tag of sample.tags || []) {
-    const span = document.createElement("span");
-    span.className = "tag";
-    span.textContent = getTagName(tag);
-    tagWrap.appendChild(span);
+    const tagName = getTagName(tag);
+    const chip = document.createElement("span");
+    chip.className = "tag tag-editable";
+
+    const label = document.createElement("span");
+    label.textContent = tagName;
+    chip.appendChild(label);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tag-remove";
+    remove.disabled = tagsSaving;
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove tag ${tagName}`);
+    remove.addEventListener("click", async () => {
+      setTagEditorDisabled(tagWrap, true);
+      const names = sampleTagNames(sample).filter((name) => name !== tagName);
+      const saved = await saveSampleTags(sample, names);
+      if (!saved) {
+        setTagEditorDisabled(tagWrap, false);
+      }
+    });
+    chip.appendChild(remove);
+    tagWrap.appendChild(chip);
   }
+
+  const tagInput = document.createElement("input");
+  tagInput.className = "tag-input";
+  tagInput.type = "text";
+  tagInput.placeholder = "Add tag";
+  tagInput.disabled = tagsSaving;
+  tagInput.setAttribute("aria-label", `Add tag to ${getSampleFileName(sample)}`);
+  tagInput.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    const name = tagInput.value.trim();
+    if (!name) {
+      return;
+    }
+    setTagEditorDisabled(tagWrap, true);
+    const saved = await saveSampleTags(sample, [...sampleTagNames(sample), name]);
+    if (!saved) {
+      setTagEditorDisabled(tagWrap, false);
+    }
+  });
+  tagWrap.appendChild(tagInput);
   meta.appendChild(tagWrap);
 
   const player = document.createElement("audio");

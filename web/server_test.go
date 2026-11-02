@@ -68,6 +68,114 @@ func TestServerListsSamplesAndTags(t *testing.T) {
 	}
 }
 
+func TestServerReplacesSampleTagsInline(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	ctx := context.Background()
+	sampleID := insertSample(t, repo, "impact.wav")
+
+	darkID, err := repo.EnsureTag(ctx, core.Tag{
+		Name:           "dark",
+		NormalizedName: "dark",
+	})
+	if err != nil {
+		t.Fatalf("EnsureTag returned error: %v", err)
+	}
+	if err := repo.AttachTagToSample(ctx, sampleID, darkID, "rules", 0.7); err != nil {
+		t.Fatalf("AttachTagToSample returned error: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+
+	body := strings.NewReader(`{"tags":["dark","instrument:kick"]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/samples/"+itoa(sampleID)+"/tags", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Tags []core.Tag `json:"tags"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Tags) != 2 {
+		t.Fatalf("expected 2 tags, got %#v", payload.Tags)
+	}
+	if payload.Tags[0].NormalizedName != "dark" || payload.Tags[0].Source != "rules" || payload.Tags[0].Confidence != 0.7 {
+		t.Fatalf("expected dark tag provenance to be preserved, got %#v", payload.Tags[0])
+	}
+	if payload.Tags[1].NormalizedName != "instrument:kick" || payload.Tags[1].Source != "manual" || payload.Tags[1].Confidence != 1 {
+		t.Fatalf("expected new tag to have manual provenance, got %#v", payload.Tags[1])
+	}
+}
+
+func TestServerRejectsInvalidSampleTagList(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	sampleID := insertSample(t, repo, "impact.wav")
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+
+	body := strings.NewReader(`{"tags":["  "]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/samples/"+itoa(sampleID)+"/tags", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for blank tag, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServerRequiresSampleTagList(t *testing.T) {
+	t.Parallel()
+
+	repo := testRepository(t)
+	ctx := context.Background()
+	sampleID := insertSample(t, repo, "impact.wav")
+	tagID, err := repo.EnsureTag(ctx, core.Tag{Name: "dark", NormalizedName: "dark"})
+	if err != nil {
+		t.Fatalf("EnsureTag returned error: %v", err)
+	}
+	if err := repo.AttachTagToSample(ctx, sampleID, tagID, "rules", 0.7); err != nil {
+		t.Fatalf("AttachTagToSample returned error: %v", err)
+	}
+
+	server, err := web.NewServer(repo)
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/samples/"+itoa(sampleID)+"/tags", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing tags field, got %d: %s", rec.Code, rec.Body.String())
+	}
+	tags, err := repo.ListTagsForSample(ctx, sampleID)
+	if err != nil {
+		t.Fatalf("ListTagsForSample returned error: %v", err)
+	}
+	if len(tags) != 1 || tags[0].NormalizedName != "dark" {
+		t.Fatalf("expected existing tags to remain unchanged, got %#v", tags)
+	}
+}
+
 func TestServerFiltersSamplesByQuery(t *testing.T) {
 	t.Parallel()
 

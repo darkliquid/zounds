@@ -160,6 +160,89 @@ func TestRepositoryUpsertAndListSamples(t *testing.T) {
 	}
 }
 
+func TestRepositoryReplaceSampleTagsPreservesProvenance(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := db.Open(ctx, db.Options{Path: filepath.Join(t.TempDir(), "zounds.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	repo := db.NewRepository(database)
+	sampleID, err := repo.UpsertSample(ctx, core.Sample{
+		SourceRoot:   "/library",
+		Path:         "/library/kicks/deep.wav",
+		RelativePath: "kicks/deep.wav",
+		FileName:     "deep.wav",
+		Extension:    "wav",
+		Format:       core.FormatWAV,
+		SizeBytes:    2048,
+	})
+	if err != nil {
+		t.Fatalf("upsert sample: %v", err)
+	}
+
+	darkID, err := repo.EnsureTag(ctx, core.Tag{Name: "dark", NormalizedName: "dark"})
+	if err != nil {
+		t.Fatalf("ensure dark tag: %v", err)
+	}
+	if err := repo.AttachTagToSample(ctx, sampleID, darkID, "rules", 0.7); err != nil {
+		t.Fatalf("attach dark tag: %v", err)
+	}
+	staleID, err := repo.EnsureTag(ctx, core.Tag{Name: "stale", NormalizedName: "stale"})
+	if err != nil {
+		t.Fatalf("ensure stale tag: %v", err)
+	}
+	if err := repo.AttachTagToSample(ctx, sampleID, staleID, "metadata", 0.4); err != nil {
+		t.Fatalf("attach stale tag: %v", err)
+	}
+	if _, err := repo.EnsureTag(ctx, core.Tag{Name: "Instrument:Kick", NormalizedName: "instrument:kick"}); err != nil {
+		t.Fatalf("ensure mixed-case tag: %v", err)
+	}
+
+	err = repo.ReplaceSampleTags(ctx, sampleID, []core.Tag{
+		{Name: "dark"},
+		{Name: "instrument:kick", Source: "manual", Confidence: 1},
+	})
+	if err != nil {
+		t.Fatalf("replace sample tags: %v", err)
+	}
+
+	tags, err := repo.ListTagsForSample(ctx, sampleID)
+	if err != nil {
+		t.Fatalf("list sample tags: %v", err)
+	}
+	if len(tags) != 2 {
+		t.Fatalf("expected 2 tags, got %#v", tags)
+	}
+	if tags[0].NormalizedName != "dark" || tags[0].Source != "rules" || tags[0].Confidence != 0.7 {
+		t.Fatalf("expected retained tag provenance to be preserved, got %#v", tags[0])
+	}
+	if tags[1].NormalizedName != "instrument:kick" || tags[1].Source != "manual" || tags[1].Confidence != 1 {
+		t.Fatalf("expected new tag provenance to be applied, got %#v", tags[1])
+	}
+	mixedCaseTag, err := repo.FindTagByName(ctx, "instrument:kick")
+	if err != nil {
+		t.Fatalf("find mixed-case tag: %v", err)
+	}
+	if mixedCaseTag.Name != "Instrument:Kick" {
+		t.Fatalf("expected existing tag display name to be preserved, got %q", mixedCaseTag.Name)
+	}
+
+	if err := repo.ReplaceSampleTags(ctx, sampleID, []core.Tag{{Name: "dark"}}); err != nil {
+		t.Fatalf("replace sample tags after removal: %v", err)
+	}
+	tags, err = repo.ListTagsForSample(ctx, sampleID)
+	if err != nil {
+		t.Fatalf("list sample tags after removal: %v", err)
+	}
+	if len(tags) != 1 || tags[0].NormalizedName != "dark" {
+		t.Fatalf("expected only dark tag after removal, got %#v", tags)
+	}
+}
+
 func TestFindSampleByPathReturnsNoRows(t *testing.T) {
 	t.Parallel()
 

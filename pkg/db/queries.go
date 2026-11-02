@@ -64,6 +64,126 @@ func (r *Repository) RemoveTagFromSample(ctx context.Context, sampleID, tagID in
 	return nil
 }
 
+// ReplaceSampleTags atomically replaces the tag set attached to a sample.
+// Provenance for tags already attached to the sample is preserved; new tags
+// use the source and confidence supplied by the caller.
+func (r *Repository) ReplaceSampleTags(ctx context.Context, sampleID int64, tags []core.Tag) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin replace sample tags transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingSampleID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM samples WHERE id = ?`, sampleID).Scan(&existingSampleID); err != nil {
+		return fmt.Errorf("find sample %d: %w", sampleID, err)
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT
+			st.tag_id,
+			t.normalized_name,
+			st.source,
+			st.confidence
+		FROM sample_tags st
+		JOIN tags t ON t.id = st.tag_id
+		WHERE st.sample_id = ?;
+	`, sampleID)
+	if err != nil {
+		return fmt.Errorf("list existing tags for sample %d: %w", sampleID, err)
+	}
+
+	existing := make(map[string]core.Tag)
+	for rows.Next() {
+		var tag core.Tag
+		if err := rows.Scan(&tag.ID, &tag.NormalizedName, &tag.Source, &tag.Confidence); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan existing sample tag: %w", err)
+		}
+		existing[tag.NormalizedName] = tag
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate existing sample tags: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close existing sample tags: %w", err)
+	}
+
+	desired := make(map[string]core.Tag, len(tags))
+	for _, tag := range tags {
+		name := strings.TrimSpace(tag.Name)
+		normalized := tag.NormalizedName
+		if normalized == "" {
+			normalized = core.NormalizeTagName(name)
+		} else {
+			normalized = core.NormalizeTagName(normalized)
+		}
+		if normalized == "" {
+			return fmt.Errorf("tag name must not be empty")
+		}
+		if name == "" {
+			name = normalized
+		}
+		if _, ok := desired[normalized]; ok {
+			continue
+		}
+		if tag.Source == "" {
+			tag.Source = "unknown"
+		}
+		tag.Name = name
+		tag.NormalizedName = normalized
+		desired[normalized] = tag
+	}
+
+	for normalized, tag := range desired {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO tags (name, normalized_name)
+			VALUES (?, ?)
+			ON CONFLICT(normalized_name) DO NOTHING;
+		`, tag.Name, normalized); err != nil {
+			return fmt.Errorf("insert replacement tag %q: %w", normalized, err)
+		}
+
+		var tagID int64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT id
+			FROM tags
+			WHERE normalized_name = ?;
+		`, normalized).Scan(&tagID); err != nil {
+			return fmt.Errorf("find replacement tag %q: %w", normalized, err)
+		}
+
+		if _, ok := existing[normalized]; ok {
+			continue
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO sample_tags (sample_id, tag_id, source, confidence)
+			VALUES (?, ?, ?, ?);
+		`, sampleID, tagID, tag.Source, tag.Confidence); err != nil {
+			return fmt.Errorf("attach replacement tag %q to sample %d: %w", normalized, sampleID, err)
+		}
+	}
+
+	for normalized, tag := range existing {
+		if _, ok := desired[normalized]; ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM sample_tags
+			WHERE sample_id = ? AND tag_id = ?;
+		`, sampleID, tag.ID); err != nil {
+			return fmt.Errorf("remove replaced tag %q from sample %d: %w", normalized, sampleID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace sample tags for sample %d: %w", sampleID, err)
+	}
+	return nil
+}
+
 func (r *Repository) FindTagByName(ctx context.Context, name string) (core.Tag, error) {
 	normalized := core.NormalizeTagName(name)
 	row := r.db.QueryRowContext(ctx, `

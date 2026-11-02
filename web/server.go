@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -74,6 +75,10 @@ type sampleResponse struct {
 	core.Sample
 	Tags     []core.Tag           `json:"tags,omitempty"`
 	Analysis *core.SampleAnalysis `json:"analysis,omitempty"`
+}
+
+type updateSampleTagsRequest struct {
+	Tags *[]string `json:"tags"`
 }
 
 type similarMatchResponse struct {
@@ -166,11 +171,6 @@ func (s *Server) handleSamples(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSampleRoutes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	rest := strings.TrimPrefix(r.URL.Path, "/api/samples/")
 	rest = strings.Trim(rest, "/")
 	if rest == "" {
@@ -182,6 +182,20 @@ func (s *Server) handleSampleRoutes(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		http.Error(w, "invalid sample id", http.StatusBadRequest)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "tags" {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.handleSampleTags(w, r, id)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -216,6 +230,62 @@ func (s *Server) handleSampleByID(w http.ResponseWriter, r *http.Request, id int
 	}
 
 	writeJSON(w, http.StatusOK, sampleResponse{Sample: sample, Tags: tags})
+}
+
+func (s *Server) handleSampleTags(w http.ResponseWriter, r *http.Request, id int64) {
+	var request updateSampleTagsRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid tag update request", http.StatusBadRequest)
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		http.Error(w, "request body must contain one JSON object", http.StatusBadRequest)
+		return
+	}
+	if request.Tags == nil {
+		http.Error(w, "tags field is required", http.StatusBadRequest)
+		return
+	}
+
+	seen := make(map[string]bool, len(*request.Tags))
+	tags := make([]core.Tag, 0, len(*request.Tags))
+	for _, rawName := range *request.Tags {
+		name := strings.TrimSpace(rawName)
+		normalized := core.NormalizeTagName(name)
+		if normalized == "" {
+			http.Error(w, "tag names must not be empty", http.StatusBadRequest)
+			return
+		}
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		tags = append(tags, core.Tag{
+			Name:           name,
+			NormalizedName: normalized,
+			Source:         "manual",
+			Confidence:     1,
+		})
+	}
+
+	if err := s.repo.ReplaceSampleTags(r.Context(), id, tags); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	response, err := s.sampleResponseByID(r.Context(), id, make(map[int64]sampleResponse))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleSampleAudio(w http.ResponseWriter, r *http.Request, id int64) {

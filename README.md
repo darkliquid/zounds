@@ -138,6 +138,7 @@ GET /api/samples?q=...
 GET /api/samples?tag=...
 GET /api/samples/:id
 GET /api/samples/:id/audio
+PUT /api/samples/:id/tags
 GET /api/tags
 GET /api/tags/:name/samples
 GET /api/clusters

@@ -44,7 +44,7 @@ Every architectural and algorithmic choice serves high-precision management of l
 | Package | Responsibility & Key Types | Current Status & Notes |
 |---|---|---|
 | `pkg/core` | Domain structs, interfaces, `DetectFormatFromExtension`, `NormalizeTagName`. | Structs lack `json:"..."` tags (PascalCase JSON in `web`/`export`). |
-| `pkg/db` | SQLite `Open`, `Migrate` (`migrations/*.sql`), `Repository` CRUD. | `MaxOpenConns(1)`. Missing `schema_migrations`, `perceptual_hashes` CRUD, and analysis metric/attribute persistence. |
+| `pkg/db` | SQLite `Open`, `Migrate` (`migrations/*.sql`), `Repository` CRUD. | `MaxOpenConns(1)`; tracks `schema_migrations` and persists `sample_analyses`/`sample_projections`. `perceptual_hashes` CRUD remains missing. |
 | `pkg/audio` | `PCMBuffer` (interleaved `[]float64` in `[-1, 1]`), `Decoder`/`Encoder`, `Registry`, `Playback` (`oto/v3`), `codecs.NewRegistry()`. | Decode: `wav`, `aiff`, `flac`, `mp3`, `ogg`. Encode: `wav`, `aiff` only. **No `aac`/`m4a` codec** despite scanner indexing them. |
 | `pkg/scanner` | Concurrent discovery (`Scanner.Scan`): `WalkDir` + `os.Stat` workers, path-sorted output. | Indexes `.wav`, `.aif/.aiff`, `.mp3`, `.flac`, `.ogg/.oga`, `.aac`, `.m4a`. No mtime skip or deleted-file pruning. |
 | `pkg/analysis` | 16 `core.Analyzer` implementations (`metadata`, `spectral`, `key`, `beat`, `pitch`, `loudness`, `dynamics`, `hpss`, `quality`, `harmonics`, `formants`, `splice`, `mfcc`, `loop`, `perceptual_hash`, `waveform`), `ContextWithDecodedSample`, 95-D `FeatureVectorBuilder`. | `analyze` runs 14 analyzers concurrently (omits `perceptual_hash`, `waveform`). **No chord analyzer yet.** |
@@ -54,7 +54,7 @@ Every architectural and algorithmic choice serves high-precision management of l
 | `pkg/cluster` | `CosineSimilarity`, `EuclideanDistance`, `Pairwise`, `NearestNeighbors`, `KMeans`, `DBSCAN`, `Project2D` (SVD PCA), `ProjectTSNE2D`. | Operates on raw unstandardized vectors. `DBSCAN` is implemented here but rejected by CLI `cluster`. |
 | `pkg/convert` | `ResampleLinear`, `ConvertChannels` (`1 <-> 2`), `Normalize` (`peak`, `rms`, `lufs`), `TranscodeFile`. | `ResampleLinear` lacks anti-aliasing; `NormalizeLUFS` currently aliases unweighted RMS. |
 | `pkg/rename` | `BuildTemplateData`, `RenderTemplate` (`join`, `slug`, `lower`, `upper`), `OrganizeByTags`, `OrganizeByCluster`. | `OrganizeBy*` unwired; CLI `rename` lacks collision checks and passes empty `Attributes`/`Metadata`. |
-| `web` | Embedded SPA (`index.html`, `app.js`, `style.css`) + read-only HTTP server (`NewServer`, `ListenAndServe`). | Tag cloud, search, `<audio>` streaming, SVG cluster map. Has N+1 queries and per-request live t-SNE recomputation. |
+| `web` | Embedded SPA (`index.html`, `app.js`, `style.css`) + HTTP server (`NewServer`, `ListenAndServe`). | Tag cloud, search, inline tag editing, `<audio>` streaming, SVG cluster map. Primary sample/cluster queries are batched and projections are persisted; `/api/tags/:name/samples` still uses per-sample tag queries. |
 | `cmd/zounds` | Re-entrant Cobra CLI (`NewRootCommand`) with 13 commands: `scan`, `analyze`, `info`, `tag`, `similar`, `cluster`, `dedup`, `convert`, `rename`, `export`, `play`, `browse`, `serve`. | `main.go` lacks `signal.NotifyContext`; `-j`/`--concurrency` is ignored outside `scan` and `dedup --exact`. |
 
 ---
@@ -77,9 +77,9 @@ Account for these verified defects before extending affected subsystems:
 
 ### C. Persistence & Schema Bottlenecks (`pkg/db`)
 9. **Discarded Analysis Results (`cmd/zounds/commands/analyze.go:58`)**: `analyze` discards `results` (`_ = results`) and persists only the 95-float `"analysis"` `FeatureVector`. String attributes (`key`, `mode`, `note_name`, `loop_class`, `embedded.*`) and named metrics are lost, leaving `rename` `.Attributes`/`.Metadata` empty and forcing `tag --auto` to re-decode files.
-10. **Global Tag Provenance Overwrite (`pkg/db/migrations/0001_initial.sql:19-35`, `pkg/db/queries.go:22-30`)**: `source` and `confidence` live on `tags(normalized_name)` rather than `sample_tags(sample_id, tag_id)`, so `EnsureTag` on Sample B overwrites provenance/confidence globally for Sample A.
-11. **Idempotency-Only Migration Runner (`pkg/db/db.go:81-102`)**: `Migrate()` re-runs every `migrations/*.sql` file on every `db.Open()` without a `schema_migrations` table. Add version tracking before adding `0002_*.sql`.
-12. **Orphaned `perceptual_hashes` & Uncached Web Projections**: `perceptual_hashes` has zero Go callers; 2D projections (`X`, `Y`) are not stored in SQLite, so `web/server.go` recomputes full $O(N^2)$ t-SNE synchronously on every `GET /api/clusters` request (`omitempty` on `X`/`Y` also drops `0.0` coordinates, and `handleSamples` / `browse` execute N+1 tag queries).
+10. **Per-Sample Tag Provenance (Resolved Guardrail)**: `source` and `confidence` live on `sample_tags(sample_id, tag_id)` via `0002_rich_analysis_and_provenance.sql`; `ReplaceSampleTags` preserves provenance for retained tags and assigns explicit provenance to new tags.
+11. **Versioned Migration Runner (Resolved)**: `Migrate()` records applied files in `schema_migrations`; add new schema changes as new numbered `migrations/*.sql` files rather than editing applied migrations.
+12. **Orphaned `perceptual_hashes` & Projection Fallback**: `perceptual_hashes` has zero Go callers. `sample_projections` stores 2D coordinates; `web` recomputes projections only when persisted coordinates are absent, and `/api/tags/:name/samples` still executes N+1 tag queries.
 
 ### D. Feature Space, Similarity, Clustering & Dedup Flaws
 13. **Unstandardized 95-D Vector Dominated by Container Metadata (`pkg/analysis/features.go:13-109`)**: Mixes `bitrate` (`~1.4e6`), `sample_rate` (`44100`), and Hz values unscaled with `[0, 1]` ratios (`chroma`, `tonnetz`, `loop_confidence`). `bitrate` and `sample_rate` dominate `>99.99%` of vector norm/distance in `similar`, `KMeans`, `DBSCAN`, `PCA`, `t-SNE`, and `LocalModelTagger`.

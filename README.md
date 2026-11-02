@@ -15,6 +15,7 @@ The codebase is library-first: the reusable logic lives under `pkg/`, and the `z
 - convert sample rate, channel layout, output format, and loudness
 - rename and organization-plan samples from templates, tags, and clusters
 - browse and preview indexed samples from the CLI
+- export rich JSON/CSV snapshots with analyses, provenance-rich tags, and 2D projections
 - serve an embedded web UI with API endpoints, tag cloud, sample browser, preview playback, and cluster bubble view
 
 ## CLI
@@ -47,8 +48,33 @@ zounds similar --threshold 0.85 --limit 20 ./Samples/Kicks/punch.wav ./Samples/S
 zounds cluster --method kmeans --k 12 --projection tsne
 zounds dedup --perceptual --threshold 8
 zounds rename --template '{{join .Tags "_"}}_{{slug .Stem}}.{{.Extension}}' --dry-run
+zounds export --format csv --output library.csv
 zounds serve --port 8080
 ```
+
+## Export formats
+
+`zounds export --format json` writes a versioned object:
+
+```json
+{
+  "schema_version": 1,
+  "exported_at": "2026-11-02T07:00:00Z",
+  "samples": [
+    {
+      "id": 1,
+      "path": "/library/drums/kick.wav",
+      "tags": [],
+      "analysis": {},
+      "projections": []
+    }
+  ]
+}
+```
+
+Each item combines the indexed sample fields with its persisted per-sample analysis, provenance-rich tags, and 2D projections.
+
+`zounds export --format csv` writes one row per sample. Base sample columns are followed by flattened analysis columns plus `tags_json`, `metrics_json`, `attributes_json`, and `projections_json`; the `*_json` cells contain valid JSON so namespaced tags and all metric/attribute keys survive CSV parsing unchanged.
 
 By default, the CLI stores its SQLite database at `$XDG_DATA_HOME/zounds/zounds.db`, falling back to `~/.local/share/zounds/zounds.db` when `XDG_DATA_HOME` is unset. Use `--db` to override it.
 

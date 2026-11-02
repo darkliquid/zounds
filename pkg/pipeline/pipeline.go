@@ -1,7 +1,8 @@
 // Package pipeline hosts the shared orchestration workflows (analysis,
-// auto-tagging, similarity search, clustering) so the CLI, the embedded web
-// application, and library callers run one implementation instead of each
-// re-implementing batch loops, decode caching, and persistence rules.
+// auto-tagging, similarity search, clustering, and rich library export) so the
+// CLI, the embedded web application, and library callers run one implementation
+// instead of each re-implementing batch loops, decode caching, and persistence
+// rules.
 package pipeline
 
 import (
